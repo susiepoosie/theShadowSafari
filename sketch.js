@@ -89,7 +89,7 @@ function processWebcam() {
     let g = capture.pixels[idx + 1];
     let b = capture.pixels[idx + 2];
     let brightness = (r + g + b) / 3;
-    let threshold  = 80; // ← adjust for your lighting
+    let threshold  = 100; // ← adjust for your lighting
 
     if (brightness < threshold) {
       thresholdImg.pixels[idx]     = 255;
