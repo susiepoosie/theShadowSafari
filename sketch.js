@@ -1,103 +1,102 @@
 // ════════════════════════════════════════════════════════
 //  SHADOW SAFARI — sketch.js
-//  Phase 1: Webcam feed + threshold silhouette
+//  Phase 2: Creature states + proper flashlight + fleeing
 // ════════════════════════════════════════════════════════
 
-let capture;          // webcam feed
-let thresholdImg;     // processed silhouette image
+let capture;
+let thresholdImg;
 
 // Stillness detection
-let prevFrame;        // last frame's pixel data for comparison
-let stillTimer = 0;   // how long the user has been still (milliseconds)
-const STILL_NEEDED = 2500; // ms they need to hold still before capture is ready
+let prevFrame;
+let stillTimer   = 0;
+const STILL_NEEDED = 2500;
 let captureReady = false;
 
-// UI elements
+// UI
 let instructionEl;
 let captureBtn;
 
-// Creatures array — populated in later phases
+// Creatures
 let creatures = [];
+
+// ── Lighting state ─────────────────────────────────────
+// lightX/Y track where the "threat" is (cursor normally,
+// screen-centre during a torch event in Phase 4)
+let lightX, lightY;
+const LIGHT_RADIUS   = 160;  // px — how far the flashlight reaches
+const FLEE_RADIUS    = 220;  // px — creatures start fleeing beyond this
+const VISIBLE_RADIUS = 180;  // px — creatures become visible within this
 
 // ── Setup ──────────────────────────────────────────────
 function setup() {
-  // Create canvas and attach to our container div
   let cnv = createCanvas(windowWidth, windowHeight);
   cnv.parent('canvas-container');
 
-  // Webcam capture (hidden — we'll draw it manually)
   capture = createCapture(VIDEO);
   capture.size(320, 240);
   capture.hide();
 
-  // Blank image for threshold output
   thresholdImg = createImage(320, 240);
 
-  // Grab UI elements
   instructionEl = select('#instruction');
   captureBtn    = select('#capture-btn');
-
-  // Button triggers capture
   captureBtn.mousePressed(captureCreature);
 
-  pixelDensity(1); // keeps pixel math simple on retina screens
+  pixelDensity(1);
+
+  // Initialise light to centre of screen
+  lightX = width  / 2;
+  lightY = height / 2;
 }
 
 // ── Main draw loop ─────────────────────────────────────
 function draw() {
-  // Dark background — not pure black, just slightly grey so
-  // the landscape can have depth later
   background(12, 12, 14);
 
-  // Only process once webcam is actually loaded
+  // Smoothly follow the mouse — feels more like a real torch
+  lightX = lerp(lightX, mouseX, 0.12);
+  lightY = lerp(lightY, mouseY, 0.12);
+
   if (capture.loadedmetadata) {
     processWebcam();
-    drawWebcamPreview();
     checkStillness();
   }
 
-  // Draw any released creatures
+  // Draw creatures BEFORE the darkness overlay so they
+  // appear lit when inside the flashlight radius
   for (let c of creatures) {
     c.update();
     c.draw();
   }
 
-  // Light overlay from cursor (Phase 4 — placeholder for now)
-  drawCursorLight();
+  // Darkness overlay goes on top — creatures peeking through
+  drawDarknessOverlay();
+
+  // Webcam preview sits above everything
+  if (capture.loadedmetadata) drawWebcamPreview();
 }
 
 // ── Webcam processing ──────────────────────────────────
 function processWebcam() {
-  // Load webcam pixels into memory so we can read/write them
   capture.loadPixels();
   thresholdImg.loadPixels();
 
-  let total = capture.pixels.length / 4; // each pixel = 4 values: R,G,B,A
+  let total = capture.pixels.length / 4;
 
   for (let i = 0; i < total; i++) {
     let idx = i * 4;
-
     let r = capture.pixels[idx];
     let g = capture.pixels[idx + 1];
     let b = capture.pixels[idx + 2];
-
-    // Brightness: average of R, G, B (0–255)
     let brightness = (r + g + b) / 3;
-
-    // THRESHOLD: if pixel is dark enough, treat it as "shadow"
-    // Adjust this value (80) depending on your lighting conditions
-    // Lower = only very dark pixels become shadow
-    // Higher = more of the image becomes shadow
-    let threshold = 80;
+    let threshold  = 80; // ← adjust for your lighting
 
     if (brightness < threshold) {
-      // Shadow pixel — white in our silhouette
       thresholdImg.pixels[idx]     = 255;
       thresholdImg.pixels[idx + 1] = 255;
       thresholdImg.pixels[idx + 2] = 255;
-      thresholdImg.pixels[idx + 3] = 220; // slight transparency
+      thresholdImg.pixels[idx + 3] = 220;
     } else {
-      // Bright pixel — transparent (not part of shadow)
       thresholdImg.pixels[idx]     = 0;
       thresholdImg.pixels[idx + 1] = 0;
       thresholdImg.pixels[idx + 2] = 0;
@@ -108,86 +107,114 @@ function processWebcam() {
   thresholdImg.updatePixels();
 }
 
-// ── Draw the webcam preview (mirrored, bottom-left) ────
+// ── Darkness overlay with flashlight cut-out ───────────
+function drawDarknessOverlay() {
+  // We use the raw Canvas 2D API (drawingContext) to create
+  // a proper radial gradient mask — much more convincing
+  // than layering ellipses.
+
+  let ctx = drawingContext;
+
+  // 1. Fill the entire canvas with near-black
+  ctx.save();
+  ctx.fillStyle = 'rgba(10, 10, 12, 0.92)';
+  ctx.fillRect(0, 0, width, height);
+
+  // 2. Cut a radial gradient "hole" at the light position
+  //    by compositing in 'destination-out' mode (erases pixels)
+  ctx.globalCompositeOperation = 'destination-out';
+
+  let gradient = ctx.createRadialGradient(
+    lightX, lightY, 0,           // inner circle (bright centre)
+    lightX, lightY, LIGHT_RADIUS // outer edge (fades to black)
+  );
+  gradient.addColorStop(0,    'rgba(0,0,0,0.92)'); // fully erase at centre
+  gradient.addColorStop(0.5,  'rgba(0,0,0,0.6)');
+  gradient.addColorStop(1,    'rgba(0,0,0,0)');    // no erase at edge
+
+  ctx.beginPath();
+  ctx.arc(lightX, lightY, LIGHT_RADIUS, 0, Math.PI * 2);
+  ctx.fillStyle = gradient;
+  ctx.fill();
+
+  ctx.restore();
+
+  // 3. Subtle warm glow ring at the light edge (drawn in p5 on top)
+  noFill();
+  for (let i = 4; i > 0; i--) {
+    stroke(255, 240, 200, 6 * i);
+    strokeWeight(1.5);
+    ellipse(lightX, lightY, LIGHT_RADIUS * 2 * (i / 4));
+  }
+}
+
+// ── Webcam preview ─────────────────────────────────────
 function drawWebcamPreview() {
   push();
-
-  // Position: bottom-left corner
-  let previewW = 240;
-  let previewH = 180;
+  let previewW = 200;
+  let previewH = 150;
   let x = 20;
-  let y = height - previewH - 20;
+  let y = height - previewH - 28;
 
-  // Mirror the image so it feels like a mirror
   translate(x + previewW, y);
   scale(-1, 1);
 
-  // Raw webcam (dim)
-  tint(255, 40);
+  tint(255, 30);
   image(capture, 0, 0, previewW, previewH);
-
-  // Silhouette overlay
-  tint(255, 180);
+  tint(255, 160);
   image(thresholdImg, 0, 0, previewW, previewH);
-
   pop();
 
-  // Label
-  fill(255, 80);
+  // Border
+  noFill();
+  stroke(255, 25);
+  strokeWeight(1);
+  rect(20, height - previewH - 28, previewW, previewH);
+
+  fill(255, 60);
   noStroke();
   textSize(9);
   textFont('Courier New');
-  text('CAPTURE WINDOW', 20, height - 8);
+  text('CAPTURE WINDOW', 20, height - 10);
 }
 
 // ── Stillness detection ────────────────────────────────
 function checkStillness() {
-  // We compare current frame to the previous frame.
-  // If very little has changed, the user is holding still.
-
-  if (!prevFrame) {
-    // First frame — just store it and move on
-    prevFrame = capture.get();
-    return;
-  }
+  if (!prevFrame) { prevFrame = capture.get(); return; }
 
   capture.loadPixels();
   prevFrame.loadPixels();
 
   let diff = 0;
-  let sampleStep = 8; // check every 8th pixel for speed
+  let sampleStep = 8;
   let total = (capture.pixels.length / 4) / sampleStep;
 
   for (let i = 0; i < total; i++) {
     let idx = i * sampleStep * 4;
-    let dr = abs(capture.pixels[idx]     - prevFrame.pixels[idx]);
-    let dg = abs(capture.pixels[idx + 1] - prevFrame.pixels[idx + 1]);
-    let db = abs(capture.pixels[idx + 2] - prevFrame.pixels[idx + 2]);
-    diff += (dr + dg + db) / 3;
+    diff += (
+      abs(capture.pixels[idx]     - prevFrame.pixels[idx]) +
+      abs(capture.pixels[idx + 1] - prevFrame.pixels[idx + 1]) +
+      abs(capture.pixels[idx + 2] - prevFrame.pixels[idx + 2])
+    ) / 3;
   }
 
-  let avgDiff = diff / total;
-
-  // avgDiff below ~8 means very little movement
-  let isStill = avgDiff < 8;
+  let isStill = (diff / total) < 8;
 
   if (isStill) {
-    stillTimer += deltaTime; // deltaTime = ms since last frame (p5 built-in)
+    stillTimer += deltaTime;
   } else {
-    stillTimer = 0;
+    stillTimer   = 0;
     captureReady = false;
     captureBtn.removeClass('ready');
     instructionEl.removeClass('active');
   }
 
-  // Has the user been still long enough?
   if (stillTimer >= STILL_NEEDED && !captureReady) {
     captureReady = true;
     captureBtn.addClass('ready');
     instructionEl.addClass('active');
     instructionEl.html('Shadow creature detected — capture it!');
   } else if (!captureReady) {
-    // Show countdown progress
     let progress = floor((stillTimer / STILL_NEEDED) * 100);
     if (progress > 5) {
       instructionEl.html(`Hold still... ${progress}%`);
@@ -198,123 +225,198 @@ function checkStillness() {
     }
   }
 
-  // Update prevFrame every 10 frames (not every frame — too expensive)
-  if (frameCount % 10 === 0) {
-    prevFrame = capture.get();
-  }
+  if (frameCount % 10 === 0) prevFrame = capture.get();
 }
 
-// ── Capture a creature ─────────────────────────────────
+// ── Capture ────────────────────────────────────────────
 function captureCreature() {
   if (!captureReady) return;
 
-  // Snapshot the current silhouette
-  let snapshot = thresholdImg.get(); // copies the image
+  let snapshot = thresholdImg.get();
+  // Spawn at a random position away from the very centre
+  let spawnX = random(width  * 0.2, width  * 0.8);
+  let spawnY = random(height * 0.2, height * 0.8);
+  creatures.push(new Creature(snapshot, spawnX, spawnY));
 
-  // Place it roughly in the centre of the canvas
-  let creature = new Creature(snapshot, width / 2, height / 2);
-  creatures.push(creature);
-
-  // Reset state
   captureReady = false;
-  stillTimer = 0;
+  stillTimer   = 0;
   captureBtn.removeClass('ready');
-  instructionEl.html('Shadow released into the wild');
+  instructionEl.html('Shadow released into the wild…');
 
-  // Brief message then reset
   setTimeout(() => {
     instructionEl.html('Hold still to capture your shadow creature');
     instructionEl.removeClass('active');
   }, 2000);
 }
 
-// ── Cursor light overlay ───────────────────────────────
-function drawCursorLight() {
-  // Draw a radial "darkness" mask with a hole at the cursor.
-  // Everything outside the radius is very dark.
-  // Phase 4 will make creatures react to this.
-
-  let lightRadius = 140;
-
-  // Radial gradient from transparent (at cursor) to dark (outside)
-  for (let r = lightRadius; r > 0; r -= 4) {
-    let alpha = map(r, 0, lightRadius, 0, 200);
-    fill(12, 12, 14, alpha / lightRadius * r);
-    noStroke();
-    ellipse(mouseX, mouseY, r * 2, r * 2);
-  }
-
-  // Darken everything outside the light radius
-  // We do this by drawing a dark rectangle with a transparent hole
-  // (simple version — Phase 4 will refine this)
-  noStroke();
-  fill(12, 12, 14, 180);
-  rect(0, 0, width, height);
-
-  // Cut out the light circle — draw lighter circle on top
-  let g = drawingContext; // access the raw Canvas 2D context
-  g.save();
-  g.globalCompositeOperation = 'destination-out';
-  // (This is an advanced technique — for now just show a simple glow)
-  g.restore();
-
-  // Simple glow circle instead
-  noFill();
-  for (let i = 3; i > 0; i--) {
-    stroke(255, 255, 255, 8 * i);
-    strokeWeight(2);
-    ellipse(mouseX, mouseY, lightRadius * 2 * i / 3, lightRadius * 2 * i / 3);
-  }
+// ── Resize ─────────────────────────────────────────────
+function windowResized() {
+  resizeCanvas(windowWidth, windowHeight);
 }
 
-// ── Creature class ─────────────────────────────────────
-// Placeholder — will be expanded significantly in Phase 3
+// ════════════════════════════════════════════════════════
+//  CREATURE CLASS
+// ════════════════════════════════════════════════════════
 class Creature {
   constructor(img, x, y) {
     this.img     = img;
     this.x       = x;
     this.y       = y;
-    this.vx      = random(-0.4, 0.4); // slow drift
-    this.vy      = random(-0.4, 0.4);
-    this.opacity = 0;                  // fade in
+    this.vx      = random(-0.3, 0.3);
+    this.vy      = random(-0.3, 0.3);
     this.w       = 240;
     this.h       = 180;
-    this.state   = 'idle';            // idle | fleeing | hidden
+
+    // ── State machine ──────────────────────────────────
+    // idle        → drifting slowly, nearly invisible
+    // illuminated → light is nearby, creature freezes nervously
+    // fleeing     → light is close, running toward edge
+    // hidden      → reached the edge/darkness, resting
+    this.state         = 'idle';
+    this.opacity       = 0;       // current rendered opacity (0–255)
+    this.targetOpacity = 15;      // what opacity we're lerping toward
+
+    // Noise offset — unique per creature so they don't all move identically
+    this.noiseOffset = random(1000);
+
+    // Flee target — where this creature is running to
+    this.fleeTargetX = x;
+    this.fleeTargetY = y;
+
+    // How long since it last changed state (prevents jitter)
+    this.stateTimer = 0;
   }
 
   update() {
-    // Drift slowly using Perlin noise
-    let n = noise(this.x * 0.002, this.y * 0.002, frameCount * 0.001);
-    this.vx += map(n, 0, 1, -0.05, 0.05);
-    this.vy += map(n, 0, 1, -0.05, 0.05);
+    this.stateTimer += deltaTime;
 
-    // Cap speed
-    this.vx = constrain(this.vx, -0.8, 0.8);
-    this.vy = constrain(this.vy, -0.8, 0.8);
+    let d = dist(lightX, lightY, this.x, this.y);
 
+    // ── State transitions ───────────────────────────────
+    if (d < FLEE_RADIUS) {
+      // Light is very close — flee
+      if (this.state !== 'fleeing') {
+        this.state = 'fleeing';
+        this.stateTimer = 0;
+        this.chooseFleeDest();
+      }
+    } else if (d < VISIBLE_RADIUS) {
+      // Light is nearby but not threatening — freeze nervously
+      if (this.state !== 'illuminated' && this.state !== 'fleeing') {
+        this.state = 'illuminated';
+        this.stateTimer = 0;
+      }
+    } else {
+      // Safe in darkness
+      if (this.state === 'fleeing' && this.stateTimer > 1200) {
+        // Only settle after 1.2s of fleeing (don't snap back immediately)
+        this.state = 'hidden';
+        this.stateTimer = 0;
+      } else if (this.state === 'illuminated') {
+        this.state = 'idle';
+      } else if (this.state === 'hidden' && this.stateTimer > 3000) {
+        // After hiding for 3s, resume gentle drifting
+        this.state = 'idle';
+        this.stateTimer = 0;
+      }
+    }
+
+    // ── Movement per state ──────────────────────────────
+    switch (this.state) {
+
+      case 'idle':
+        // Slow organic drift via Perlin noise
+        let n  = noise(this.x * 0.002 + this.noiseOffset,
+                       this.y * 0.002,
+                       frameCount * 0.0008);
+        let angle = n * TWO_PI * 2;
+        this.vx = lerp(this.vx, cos(angle) * 0.4, 0.02);
+        this.vy = lerp(this.vy, sin(angle) * 0.4, 0.02);
+        this.targetOpacity = 18;
+        break;
+
+      case 'illuminated':
+        // Nearly stopped — nervous trembling
+        this.vx = lerp(this.vx, random(-0.15, 0.15), 0.1);
+        this.vy = lerp(this.vy, random(-0.15, 0.15), 0.1);
+        // Slightly more visible when caught in the light
+        this.targetOpacity = 55;
+        break;
+
+      case 'fleeing':
+        // Accelerate toward flee destination
+        let fx  = this.fleeTargetX - this.x;
+        let fy  = this.fleeTargetY - this.y;
+        let mag = sqrt(fx * fx + fy * fy);
+        if (mag > 1) {
+          this.vx = lerp(this.vx, (fx / mag) * 3.5, 0.08);
+          this.vy = lerp(this.vy, (fy / mag) * 3.5, 0.08);
+        }
+        // Briefly more visible (panic flash) then fades
+        this.targetOpacity = this.stateTimer < 400 ? 70 : 20;
+        break;
+
+      case 'hidden':
+        // Slow right down — lurking at edges
+        this.vx = lerp(this.vx, 0, 0.05);
+        this.vy = lerp(this.vy, 0, 0.05);
+        this.targetOpacity = 8;
+        break;
+    }
+
+    // Apply velocity
     this.x += this.vx;
     this.y += this.vy;
 
-    // Keep within canvas
-    this.x = constrain(this.x, 0, width);
-    this.y = constrain(this.y, 0, height);
+    // Soft boundary — nudge back gently rather than hard-clamping
+    let margin = 60;
+    if (this.x < margin)        this.vx += 0.15;
+    if (this.x > width - margin) this.vx -= 0.15;
+    if (this.y < margin)        this.vy += 0.15;
+    if (this.y > height - margin) this.vy -= 0.15;
 
-    // Fade in
-    this.opacity = min(this.opacity + 1, 60); // max opacity 60/255 — ghostly
+    // Smooth opacity transition
+    this.opacity = lerp(this.opacity, this.targetOpacity, 0.04);
+  }
+
+  // Pick a flee destination near the screen edge
+  chooseFleeDest() {
+    // Find the nearest edge and flee toward it
+    let edges = [
+      { x: random(0,   width * 0.15),  y: this.y },              // left
+      { x: random(width * 0.85, width), y: this.y },              // right
+      { x: this.x, y: random(0,   height * 0.15) },               // top
+      { x: this.x, y: random(height * 0.85, height) },            // bottom
+    ];
+
+    // Pick the closest edge direction
+    let nearest = edges[0];
+    let nearDist = dist(this.x, this.y, nearest.x, nearest.y);
+    for (let e of edges) {
+      let d = dist(this.x, this.y, e.x, e.y);
+      if (d < nearDist) { nearDist = d; nearest = e; }
+    }
+
+    this.fleeTargetX = nearest.x;
+    this.fleeTargetY = nearest.y;
   }
 
   draw() {
     push();
-    // Mirror so creatures don't all face the same way
     translate(this.x, this.y);
     imageMode(CENTER);
-    tint(255, this.opacity);
+
+    // Creatures near the light get a subtle blue-grey tint
+    // (simulates light falling on them)
+    let d = dist(lightX, lightY, this.x, this.y);
+    if (d < VISIBLE_RADIUS) {
+      let litAmount = map(d, 0, VISIBLE_RADIUS, 180, 0);
+      tint(200, 210, 230, this.opacity + litAmount * 0.4);
+    } else {
+      tint(255, 255, 255, this.opacity);
+    }
+
     image(this.img, 0, 0, this.w, this.h);
     pop();
   }
-}
-
-// ── Resize canvas when window changes ─────────────────
-function windowResized() {
-  resizeCanvas(windowWidth, windowHeight);
 }
