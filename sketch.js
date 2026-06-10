@@ -109,42 +109,44 @@ function processWebcam() {
 
 // ── Darkness overlay with flashlight cut-out ───────────
 function drawDarknessOverlay() {
-  // We use the raw Canvas 2D API (drawingContext) to create
-  // a proper radial gradient mask — much more convincing
-  // than layering ellipses.
+  // Reliable pure-p5.js approach:
+  // Draw many concentric dark rings from the edge of the
+  // light radius outward, then a solid dark rectangle
+  // masked to exclude the light circle area.
+  // This avoids drawingContext compositing which can silently
+  // fail depending on browser/canvas state.
 
-  let ctx = drawingContext;
+  noStroke();
 
-  // 1. Fill the entire canvas with near-black
-  ctx.save();
-  ctx.fillStyle = 'rgba(10, 10, 12, 0.92)';
-  ctx.fillRect(0, 0, width, height);
+  // Step 1 — dark overlay everywhere EXCEPT near the light
+  // We draw a solid dark rect, then "punch through" it with
+  // progressively more transparent rings near the light centre.
 
-  // 2. Cut a radial gradient "hole" at the light position
-  //    by compositing in 'destination-out' mode (erases pixels)
-  ctx.globalCompositeOperation = 'destination-out';
+  // Outer darkness — solid dark rect
+  fill(10, 10, 12, 235);
+  rect(0, 0, width, height);
 
-  let gradient = ctx.createRadialGradient(
-    lightX, lightY, 0,           // inner circle (bright centre)
-    lightX, lightY, LIGHT_RADIUS // outer edge (fades to black)
-  );
-  gradient.addColorStop(0,    'rgba(0,0,0,0.92)'); // fully erase at centre
-  gradient.addColorStop(0.5,  'rgba(0,0,0,0.6)');
-  gradient.addColorStop(1,    'rgba(0,0,0,0)');    // no erase at edge
+  // Step 2 — re-illuminate the flashlight area by drawing
+  // concentric circles from outside-in with increasing transparency
+  // (this effectively "removes" the solid darkness near the cursor)
+  let steps = 40;
+  for (let i = 0; i <= steps; i++) {
+    let r     = map(i, 0, steps, LIGHT_RADIUS, 0);
+    // At r=LIGHT_RADIUS (edge): barely erase (alpha ~0)
+    // At r=0 (centre): fully erase the dark overlay (alpha ~235)
+    let alpha = map(i, 0, steps, 0, 240);
+    // Draw in the background colour to "paint back" the light
+    fill(12, 12, 14, alpha);
+    noStroke();
+    ellipse(lightX, lightY, r * 2, r * 2);
+  }
 
-  ctx.beginPath();
-  ctx.arc(lightX, lightY, LIGHT_RADIUS, 0, Math.PI * 2);
-  ctx.fillStyle = gradient;
-  ctx.fill();
-
-  ctx.restore();
-
-  // 3. Subtle warm glow ring at the light edge (drawn in p5 on top)
+  // Step 3 — soft warm glow ring at cursor
   noFill();
-  for (let i = 4; i > 0; i--) {
-    stroke(255, 240, 200, 6 * i);
-    strokeWeight(1.5);
-    ellipse(lightX, lightY, LIGHT_RADIUS * 2 * (i / 4));
+  for (let i = 5; i > 0; i--) {
+    stroke(255, 245, 210, 5 * i);
+    strokeWeight(1);
+    ellipse(lightX, lightY, (LIGHT_RADIUS * 0.3) * (i / 5) * 2);
   }
 }
 
