@@ -24,8 +24,8 @@ let creatures = [];
 // screen-centre during a torch event in Phase 4)
 let lightX, lightY;
 const LIGHT_RADIUS   = 160;  // px — how far the flashlight reaches
-const FLEE_RADIUS    = 220;  // px — creatures start fleeing beyond this
-const VISIBLE_RADIUS = 180;  // px — creatures become visible within this
+const FLEE_RADIUS    = 120;  // px — creatures start fleeing beyond this
+const VISIBLE_RADIUS = 250;  // px — creatures become visible within this
 
 // ── Setup ──────────────────────────────────────────────
 function setup() {
@@ -308,7 +308,7 @@ class Creature {
         this.stateTimer = 0;
       } else if (this.state === 'illuminated') {
         this.state = 'idle';
-      } else if (this.state === 'hidden' && this.stateTimer > 3000) {
+      } else if (this.state === 'hidden' && this.stateTimer > 1500) {
         // After hiding for 3s, resume gentle drifting
         this.state = 'idle';
         this.stateTimer = 0;
@@ -326,7 +326,7 @@ class Creature {
         let angle = n * TWO_PI * 2;
         this.vx = lerp(this.vx, cos(angle) * 0.4, 0.02);
         this.vy = lerp(this.vy, sin(angle) * 0.4, 0.02);
-        this.targetOpacity = 18;
+        this.targetOpacity = 45;
         break;
 
       case 'illuminated':
@@ -334,7 +334,7 @@ class Creature {
         this.vx = lerp(this.vx, random(-0.15, 0.15), 0.1);
         this.vy = lerp(this.vy, random(-0.15, 0.15), 0.1);
         // Slightly more visible when caught in the light
-        this.targetOpacity = 55;
+        this.targetOpacity = 125;
         break;
 
       case 'fleeing':
@@ -343,18 +343,18 @@ class Creature {
         let fy  = this.fleeTargetY - this.y;
         let mag = sqrt(fx * fx + fy * fy);
         if (mag > 1) {
-          this.vx = lerp(this.vx, (fx / mag) * 3.5, 0.08);
-          this.vy = lerp(this.vy, (fy / mag) * 3.5, 0.08);
+          this.vx = lerp(this.vx, (fx / mag) * 1.8, 0.05);
+          this.vy = lerp(this.vy, (fy / mag) * 1.8, 0.05);
         }
         // Briefly more visible (panic flash) then fades
-        this.targetOpacity = this.stateTimer < 400 ? 70 : 20;
+        this.targetOpacity = this.stateTimer < 400 ? 140 : 60;
         break;
 
       case 'hidden':
         // Slow right down — lurking at edges
         this.vx = lerp(this.vx, 0, 0.05);
         this.vy = lerp(this.vy, 0, 0.05);
-        this.targetOpacity = 8;
+        this.targetOpacity = 30;
         break;
     }
 
@@ -363,11 +363,11 @@ class Creature {
     this.y += this.vy;
 
     // Soft boundary — nudge back gently rather than hard-clamping
-    let margin = 60;
-    if (this.x < margin)        this.vx += 0.15;
-    if (this.x > width - margin) this.vx -= 0.15;
-    if (this.y < margin)        this.vy += 0.15;
-    if (this.y > height - margin) this.vy -= 0.15;
+    let margin = 120;
+    if (this.x < margin)        this.vx += 0.4;
+    if (this.x > width - margin) this.vx -= 0.4;
+    if (this.y < margin)        this.vy += 0.4;
+    if (this.y > height - margin) this.vy -= 0.4;
 
     // Smooth opacity transition
     this.opacity = lerp(this.opacity, this.targetOpacity, 0.04);
@@ -377,10 +377,10 @@ class Creature {
   chooseFleeDest() {
     // Find the nearest edge and flee toward it
     let edges = [
-      { x: random(0,   width * 0.15),  y: this.y },              // left
-      { x: random(width * 0.85, width), y: this.y },              // right
-      { x: this.x, y: random(0,   height * 0.15) },               // top
-      { x: this.x, y: random(height * 0.85, height) },            // bottom
+      { x: random(width  * 0.05, width  * 0.2),  y: this.y },
+      { x: random(width  * 0.8,  width  * 0.95), y: this.y },
+      { x: this.x, y: random(height * 0.05, height * 0.2)  },
+      { x: this.x, y: random(height * 0.8,  height * 0.95) },
     ];
 
     // Pick the closest edge direction
@@ -404,8 +404,8 @@ class Creature {
     // (simulates light falling on them)
     let d = dist(lightX, lightY, this.x, this.y);
     if (d < VISIBLE_RADIUS) {
-      let litAmount = map(d, 0, VISIBLE_RADIUS, 180, 0);
-      tint(200, 210, 230, this.opacity + litAmount * 0.4);
+      let litAmount = map(d, 0, VISIBLE_RADIUS, 255, 0);
+      tint(200, 210, 230, this.opacity + litAmount * 0.6);
     } else {
       tint(255, 255, 255, this.opacity);
     }
