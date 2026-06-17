@@ -109,45 +109,37 @@ function processWebcam() {
 
 // ── Darkness overlay with flashlight cut-out ───────────
 function drawDarknessOverlay() {
-  // Reliable pure-p5.js approach:
-  // Draw many concentric dark rings from the edge of the
-  // light radius outward, then a solid dark rectangle
-  // masked to exclude the light circle area.
-  // This avoids drawingContext compositing which can silently
-  // fail depending on browser/canvas state.
+  let ctx = drawingContext;
 
-  noStroke();
+  // Save state
+  ctx.save();
 
-  // Step 1 — dark overlay everywhere EXCEPT near the light
-  // We draw a solid dark rect, then "punch through" it with
-  // progressively more transparent rings near the light centre.
+  // Fill entire canvas black
+  ctx.fillStyle = 'rgba(10, 10, 12, 0.93)';
+  ctx.fillRect(0, 0, width, height);
 
-  // Outer darkness — solid dark rect
-  fill(10, 10, 12, 235);
-  rect(0, 0, width, height);
+  // Punch a transparent hole where the flashlight is
+  ctx.globalCompositeOperation = 'destination-out';
+  let hole = ctx.createRadialGradient(lightX, lightY, 0, lightX, lightY, LIGHT_RADIUS);
+  hole.addColorStop(0,    'rgba(0,0,0,1)');
+  hole.addColorStop(0.5,  'rgba(0,0,0,1)');
+  hole.addColorStop(1,    'rgba(0,0,0,0)');
+  ctx.fillStyle = hole;
+  ctx.fillRect(0, 0, width, height);
 
-  // Step 2 — re-illuminate the flashlight area by drawing
-  // concentric circles from outside-in with increasing transparency
-  // (this effectively "removes" the solid darkness near the cursor)
-  let steps = 40;
-  for (let i = 0; i <= steps; i++) {
-    let r     = map(i, 0, steps, LIGHT_RADIUS, 0);
-    // At r=LIGHT_RADIUS (edge): barely erase (alpha ~0)
-    // At r=0 (centre): fully erase the dark overlay (alpha ~235)
-    let alpha = map(i, 0, steps, 0, 240);
-    // Draw in the background colour to "paint back" the light
-    fill(12, 12, 14, alpha);
-    noStroke();
-    ellipse(lightX, lightY, r * 2, r * 2);
-  }
+  // Reset compositing
+  ctx.globalCompositeOperation = 'source-over';
 
-  // Step 3 — soft warm glow ring at cursor
-  noFill();
-  for (let i = 5; i > 0; i--) {
-    stroke(255, 245, 210, 5 * i);
-    strokeWeight(1);
-    ellipse(lightX, lightY, (LIGHT_RADIUS * 0.3) * (i / 5) * 2);
-  }
+  // Warm glow on top
+  let glow = ctx.createRadialGradient(lightX, lightY, 0, lightX, lightY, LIGHT_RADIUS);
+  glow.addColorStop(0,    'rgba(255,220,100,0.18)');
+  glow.addColorStop(0.4,  'rgba(255,160,40,0.08)');
+  glow.addColorStop(0.7,  'rgba(180,80,10,0.03)');
+  glow.addColorStop(1,    'rgba(0,0,0,0)');
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, width, height);
+
+  ctx.restore();
 }
 
 // ── Webcam preview ─────────────────────────────────────
