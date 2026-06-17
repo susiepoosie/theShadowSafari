@@ -24,8 +24,8 @@ let creatures = [];
 // screen-centre during a torch event in Phase 4)
 let lightX, lightY;
 const LIGHT_RADIUS   = 160;  // px — how far the flashlight reaches
-const FLEE_RADIUS    = 120;  // px — creatures start fleeing beyond this
-const VISIBLE_RADIUS = 250;  // px — creatures become visible within this
+const FLEE_RADIUS    = 160;  // px — creatures start fleeing beyond this
+const VISIBLE_RADIUS = 280;  // px — creatures become visible within this
 
 // ── Setup ──────────────────────────────────────────────
 function setup() {
