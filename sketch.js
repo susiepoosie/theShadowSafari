@@ -79,15 +79,15 @@ function processWebcam() {
     let threshold  = 100;
 
     if (brightness < threshold) {
-      thresholdImg.pixels[idx]     = 255;
-      thresholdImg.pixels[idx + 1] = 255;
-      thresholdImg.pixels[idx + 2] = 255;
-      thresholdImg.pixels[idx + 3] = 220;
-    } else {
       thresholdImg.pixels[idx]     = 0;
       thresholdImg.pixels[idx + 1] = 0;
       thresholdImg.pixels[idx + 2] = 0;
-      thresholdImg.pixels[idx + 3] = 0;
+      thresholdImg.pixels[idx + 3] = 0;   // was 220 — now transparent
+    } else {
+      thresholdImg.pixels[idx]     = 255;
+      thresholdImg.pixels[idx + 1] = 255;
+      thresholdImg.pixels[idx + 2] = 255;
+      thresholdImg.pixels[idx + 3] = 220; // was 0 — now visible
     }
   }
 
