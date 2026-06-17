@@ -1,8 +1,3 @@
-// ════════════════════════════════════════════════════════
-//  SHADOW SAFARI — sketch.js
-//  Phase 2: Creature states + proper flashlight + fleeing
-// ════════════════════════════════════════════════════════
-
 let capture;
 let thresholdImg;
 
@@ -20,12 +15,10 @@ let captureBtn;
 let creatures = [];
 
 // ── Lighting state ─────────────────────────────────────
-// lightX/Y track where the "threat" is (cursor normally,
-// screen-centre during a torch event in Phase 4)
 let lightX, lightY;
-const LIGHT_RADIUS   = 160;  // px — how far the flashlight reaches
-const FLEE_RADIUS    = 160;  // px — creatures start fleeing beyond this
-const VISIBLE_RADIUS = 280;  // px — creatures become visible within this
+const LIGHT_RADIUS   = 160;
+const FLEE_RADIUS    = 120;
+const VISIBLE_RADIUS = 250;
 
 // ── Setup ──────────────────────────────────────────────
 function setup() {
@@ -44,7 +37,6 @@ function setup() {
 
   pixelDensity(1);
 
-  // Initialise light to centre of screen
   lightX = width  / 2;
   lightY = height / 2;
 }
@@ -53,7 +45,6 @@ function setup() {
 function draw() {
   background(45, 42, 48);
 
-  // Smoothly follow the mouse — feels more like a real torch
   lightX = lerp(lightX, mouseX, 0.12);
   lightY = lerp(lightY, mouseY, 0.12);
 
@@ -62,17 +53,13 @@ function draw() {
     checkStillness();
   }
 
-  // Draw creatures BEFORE the darkness overlay so they
-  // appear lit when inside the flashlight radius
   for (let c of creatures) {
     c.update();
     c.draw();
   }
 
-  // Darkness overlay goes on top — creatures peeking through
   drawDarknessOverlay();
 
-  // Webcam preview sits above everything
   if (capture.loadedmetadata) drawWebcamPreview();
 }
 
@@ -89,7 +76,7 @@ function processWebcam() {
     let g = capture.pixels[idx + 1];
     let b = capture.pixels[idx + 2];
     let brightness = (r + g + b) / 3;
-    let threshold  = 100; // ← adjust for your lighting
+    let threshold  = 100;
 
     if (brightness < threshold) {
       thresholdImg.pixels[idx]     = 255;
@@ -111,14 +98,11 @@ function processWebcam() {
 function drawDarknessOverlay() {
   let ctx = drawingContext;
 
-  // Save state
   ctx.save();
 
-  // Fill entire canvas black
   ctx.fillStyle = 'rgba(45, 42, 48, 0.82)';
   ctx.fillRect(0, 0, width, height);
 
-  // Punch a transparent hole where the flashlight is
   ctx.globalCompositeOperation = 'destination-out';
   let hole = ctx.createRadialGradient(lightX, lightY, 0, lightX, lightY, LIGHT_RADIUS);
   hole.addColorStop(0,    'rgba(0,0,0,1)');
@@ -127,10 +111,8 @@ function drawDarknessOverlay() {
   ctx.fillStyle = hole;
   ctx.fillRect(0, 0, width, height);
 
-  // Reset compositing
   ctx.globalCompositeOperation = 'source-over';
 
-  // Warm glow on top
   let glow = ctx.createRadialGradient(lightX, lightY, 0, lightX, lightY, LIGHT_RADIUS);
   glow.addColorStop(0,    'rgba(255,220,100,0.18)');
   glow.addColorStop(0.4,  'rgba(255,160,40,0.08)');
@@ -159,7 +141,6 @@ function drawWebcamPreview() {
   image(thresholdImg, 0, 0, previewW, previewH);
   pop();
 
-  // Border
   noFill();
   stroke(255, 25);
   strokeWeight(1);
@@ -227,7 +208,6 @@ function captureCreature() {
   if (!captureReady) return;
 
   let snapshot = thresholdImg.get();
-  // Spawn at a random position away from the very centre
   let spawnX = random(width  * 0.2, width  * 0.8);
   let spawnY = random(height * 0.2, height * 0.8);
   creatures.push(new Creature(snapshot, spawnX, spawnY));
@@ -261,23 +241,15 @@ class Creature {
     this.w       = 240;
     this.h       = 180;
 
-    // ── State machine ──────────────────────────────────
-    // idle        → drifting slowly, nearly invisible
-    // illuminated → light is nearby, creature freezes nervously
-    // fleeing     → light is close, running toward edge
-    // hidden      → reached the edge/darkness, resting
     this.state         = 'idle';
-    this.opacity       = 0;       // current rendered opacity (0–255)
-    this.targetOpacity = 15;      // what opacity we're lerping toward
+    this.opacity       = 0;
+    this.targetOpacity = 180;
 
-    // Noise offset — unique per creature so they don't all move identically
     this.noiseOffset = random(1000);
 
-    // Flee target — where this creature is running to
     this.fleeTargetX = x;
     this.fleeTargetY = y;
 
-    // How long since it last changed state (prevents jitter)
     this.stateTimer = 0;
   }
 
@@ -286,59 +258,48 @@ class Creature {
 
     let d = dist(lightX, lightY, this.x, this.y);
 
-    // ── State transitions ───────────────────────────────
     if (d < FLEE_RADIUS) {
-      // Light is very close — flee
       if (this.state !== 'fleeing') {
         this.state = 'fleeing';
         this.stateTimer = 0;
         this.chooseFleeDest();
       }
     } else if (d < VISIBLE_RADIUS) {
-      // Light is nearby but not threatening — freeze nervously
       if (this.state !== 'illuminated' && this.state !== 'fleeing') {
         this.state = 'illuminated';
         this.stateTimer = 0;
       }
     } else {
-      // Safe in darkness
       if (this.state === 'fleeing' && this.stateTimer > 1200) {
-        // Only settle after 1.2s of fleeing (don't snap back immediately)
         this.state = 'hidden';
         this.stateTimer = 0;
       } else if (this.state === 'illuminated') {
         this.state = 'idle';
       } else if (this.state === 'hidden' && this.stateTimer > 1500) {
-        // After hiding for 3s, resume gentle drifting
         this.state = 'idle';
         this.stateTimer = 0;
       }
     }
 
-    // ── Movement per state ──────────────────────────────
     switch (this.state) {
 
       case 'idle':
-        // Slow organic drift via Perlin noise
         let n  = noise(this.x * 0.002 + this.noiseOffset,
                        this.y * 0.002,
                        frameCount * 0.0008);
         let angle = n * TWO_PI * 2;
         this.vx = lerp(this.vx, cos(angle) * 0.4, 0.02);
         this.vy = lerp(this.vy, sin(angle) * 0.4, 0.02);
-        this.targetOpacity = 45;
+        this.targetOpacity = 180;
         break;
 
       case 'illuminated':
-        // Nearly stopped — nervous trembling
         this.vx = lerp(this.vx, random(-0.15, 0.15), 0.1);
         this.vy = lerp(this.vy, random(-0.15, 0.15), 0.1);
-        // Slightly more visible when caught in the light
-        this.targetOpacity = 125;
+        this.targetOpacity = 200;
         break;
 
       case 'fleeing':
-        // Accelerate toward flee destination
         let fx  = this.fleeTargetX - this.x;
         let fy  = this.fleeTargetY - this.y;
         let mag = sqrt(fx * fx + fy * fy);
@@ -346,36 +307,29 @@ class Creature {
           this.vx = lerp(this.vx, (fx / mag) * 4.5, 0.12);
           this.vy = lerp(this.vy, (fy / mag) * 4.5, 0.12);
         }
-        // Briefly more visible (panic flash) then fades
-        this.targetOpacity = this.stateTimer < 400 ? 140 : 60;
+        this.targetOpacity = this.stateTimer < 400 ? 220 : 160;
         break;
 
       case 'hidden':
-        // Slow right down — lurking at edges
         this.vx = lerp(this.vx, 0, 0.05);
         this.vy = lerp(this.vy, 0, 0.05);
-        this.targetOpacity = 30;
+        this.targetOpacity = 120;
         break;
     }
 
-    // Apply velocity
     this.x += this.vx;
     this.y += this.vy;
 
-    // Soft boundary — nudge back gently rather than hard-clamping
     let margin = 120;
-    if (this.x < margin)        this.vx += 0.4;
+    if (this.x < margin)         this.vx += 0.4;
     if (this.x > width - margin) this.vx -= 0.4;
-    if (this.y < margin)        this.vy += 0.4;
+    if (this.y < margin)         this.vy += 0.4;
     if (this.y > height - margin) this.vy -= 0.4;
 
-    // Smooth opacity transition
     this.opacity = lerp(this.opacity, this.targetOpacity, 0.04);
   }
 
-  // Pick a flee destination near the screen edge
   chooseFleeDest() {
-    // Find the nearest edge and flee toward it
     let edges = [
       { x: random(width  * 0.05, width  * 0.2),  y: this.y },
       { x: random(width  * 0.8,  width  * 0.95), y: this.y },
@@ -383,7 +337,6 @@ class Creature {
       { x: this.x, y: random(height * 0.8,  height * 0.95) },
     ];
 
-    // Pick the closest edge direction
     let nearest = edges[0];
     let nearDist = dist(this.x, this.y, nearest.x, nearest.y);
     for (let e of edges) {
@@ -400,17 +353,16 @@ class Creature {
     translate(this.x, this.y);
     imageMode(CENTER);
 
-    // Creatures near the light get a subtle blue-grey tint
-    // (simulates light falling on them)
+    drawingContext.globalCompositeOperation = 'multiply';
+
     let d = dist(lightX, lightY, this.x, this.y);
-    if (d < VISIBLE_RADIUS) {
-      let litAmount = map(d, 0, VISIBLE_RADIUS, 255, 0);
-      tint(30, 30, 35, this.opacity + litAmount * 0.6);
-    } else {
-      tint(30, 30, 35, this.opacity);
-    }
+    let litAmount = d < VISIBLE_RADIUS ? map(d, 0, VISIBLE_RADIUS, 1, 0) : 0;
+    let brightness = lerp(60, 120, litAmount);
+    tint(brightness, brightness, brightness, this.opacity);
 
     image(this.img, 0, 0, this.w, this.h);
+
+    drawingContext.globalCompositeOperation = 'source-over';
     pop();
   }
 }
