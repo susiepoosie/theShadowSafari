@@ -51,7 +51,7 @@ function setup() {
 
 // ── Main draw loop ─────────────────────────────────────
 function draw() {
-  background(12, 12, 14);
+  background(45, 42, 48);
 
   // Smoothly follow the mouse — feels more like a real torch
   lightX = lerp(lightX, mouseX, 0.12);
@@ -115,7 +115,7 @@ function drawDarknessOverlay() {
   ctx.save();
 
   // Fill entire canvas black
-  ctx.fillStyle = 'rgba(10, 10, 12, 0.93)';
+  ctx.fillStyle = 'rgba(45, 42, 48, 0.82)';
   ctx.fillRect(0, 0, width, height);
 
   // Punch a transparent hole where the flashlight is
@@ -343,8 +343,8 @@ class Creature {
         let fy  = this.fleeTargetY - this.y;
         let mag = sqrt(fx * fx + fy * fy);
         if (mag > 1) {
-          this.vx = lerp(this.vx, (fx / mag) * 1.8, 0.05);
-          this.vy = lerp(this.vy, (fy / mag) * 1.8, 0.05);
+          this.vx = lerp(this.vx, (fx / mag) * 4.5, 0.12);
+          this.vy = lerp(this.vy, (fy / mag) * 4.5, 0.12);
         }
         // Briefly more visible (panic flash) then fades
         this.targetOpacity = this.stateTimer < 400 ? 140 : 60;
@@ -405,9 +405,9 @@ class Creature {
     let d = dist(lightX, lightY, this.x, this.y);
     if (d < VISIBLE_RADIUS) {
       let litAmount = map(d, 0, VISIBLE_RADIUS, 255, 0);
-      tint(200, 210, 230, this.opacity + litAmount * 0.6);
+      tint(30, 30, 35, this.opacity + litAmount * 0.6);
     } else {
-      tint(255, 255, 255, this.opacity);
+      tint(30, 30, 35, this.opacity);
     }
 
     image(this.img, 0, 0, this.w, this.h);
