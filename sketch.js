@@ -1,3 +1,5 @@
+let handpose;
+let hands = [];
 let capture;
 let thresholdImg;
 
@@ -28,6 +30,13 @@ function setup() {
   capture = createCapture(VIDEO);
   capture.size(320, 240);
   capture.hide();
+
+  handpose = ml5.handpose(capture, () => {
+    console.log('HandPose ready');
+  });
+  handpose.on('predict', results => {
+    hands = results;
+  });
 
   thresholdImg = createImage(320, 240);
 
@@ -65,33 +74,66 @@ function draw() {
 
 // ── Webcam processing ──────────────────────────────────
 function processWebcam() {
-  capture.loadPixels();
   thresholdImg.loadPixels();
 
-  let total = capture.pixels.length / 4;
+  // Clear to transparent
+  for (let i = 0; i < thresholdImg.pixels.length; i += 4) {
+    thresholdImg.pixels[i]     = 0;
+    thresholdImg.pixels[i + 1] = 0;
+    thresholdImg.pixels[i + 2] = 0;
+    thresholdImg.pixels[i + 3] = 0;
+  }
+  thresholdImg.updatePixels();
 
-  for (let i = 0; i < total; i++) {
-    let idx = i * 4;
-    let r = capture.pixels[idx];
-    let g = capture.pixels[idx + 1];
-    let b = capture.pixels[idx + 2];
-    let brightness = (r + g + b) / 3;
-    let threshold  = 100;
+  if (hands.length === 0) return;
 
-    if (brightness < threshold) {
-      thresholdImg.pixels[idx]     = 0;
-      thresholdImg.pixels[idx + 1] = 0;
-      thresholdImg.pixels[idx + 2] = 0;
-      thresholdImg.pixels[idx + 3] = 0;   // was 220 — now transparent
-    } else {
-      thresholdImg.pixels[idx]     = 255;
-      thresholdImg.pixels[idx + 1] = 255;
-      thresholdImg.pixels[idx + 2] = 255;
-      thresholdImg.pixels[idx + 3] = 220; // was 0 — now visible
+  // Draw filled hand silhouette onto thresholdImg using a graphics buffer
+  let g = createGraphics(320, 240);
+  g.noStroke();
+  g.fill(255);
+
+  for (let hand of hands) {
+    let kp = hand.landmarks;
+
+    // Draw filled palm
+    g.beginShape();
+    // Wrist and base knuckles form the palm outline
+    let palmPoints = [0, 1, 5, 9, 13, 17];
+    for (let i of palmPoints) {
+      g.vertex(kp[i][0], kp[i][1]);
+    }
+    g.endShape(CLOSE);
+
+    // Draw each finger as a filled shape
+    let fingers = [
+      [1, 2, 3, 4],       // thumb
+      [5, 6, 7, 8],       // index
+      [9, 10, 11, 12],    // middle
+      [13, 14, 15, 16],   // ring
+      [17, 18, 19, 20],   // pinky
+    ];
+
+    for (let finger of fingers) {
+      g.beginShape();
+      for (let i of finger) {
+        g.vertex(kp[i][0], kp[i][1]);
+      }
+      g.endShape(CLOSE);
     }
   }
 
+  // Copy graphics buffer into thresholdImg
+  let gImg = g.get();
+  gImg.loadPixels();
+  thresholdImg.loadPixels();
+  for (let i = 0; i < thresholdImg.pixels.length; i += 4) {
+    thresholdImg.pixels[i]     = 255;
+    thresholdImg.pixels[i + 1] = 255;
+    thresholdImg.pixels[i + 2] = 255;
+    thresholdImg.pixels[i + 3] = gImg.pixels[i + 3] > 0 ? 220 : 0;
+  }
   thresholdImg.updatePixels();
+  g.remove();
 }
 
 // ── Darkness overlay with flashlight cut-out ───────────
@@ -158,34 +200,35 @@ function drawWebcamPreview() {
 
 // ── Stillness detection ────────────────────────────────
 function checkStillness() {
-  if (!prevFrame) { prevFrame = capture.get(); return; }
-
-  capture.loadPixels();
-  prevFrame.loadPixels();
-
-  let diff = 0;
-  let sampleStep = 8;
-  let total = (capture.pixels.length / 4) / sampleStep;
-
-  for (let i = 0; i < total; i++) {
-    let idx = i * sampleStep * 4;
-    diff += (
-      abs(capture.pixels[idx]     - prevFrame.pixels[idx]) +
-      abs(capture.pixels[idx + 1] - prevFrame.pixels[idx + 1]) +
-      abs(capture.pixels[idx + 2] - prevFrame.pixels[idx + 2])
-    ) / 3;
+  if (hands.length === 0) {
+    stillTimer = 0;
+    captureReady = false;
+    captureBtn.removeClass('ready');
+    instructionEl.html('Show your hand to capture a shadow creature');
+    instructionEl.removeClass('active');
+    return;
   }
 
-  let isStill = (diff / total) < 8;
+  // Use wrist position (landmark 0) to check for stillness
+  let wrist = hands[0].landmarks[0];
+  if (!prevFrame) {
+    prevFrame = { x: wrist[0], y: wrist[1] };
+    return;
+  }
+
+  let moved = dist(wrist[0], wrist[1], prevFrame.x, prevFrame.y);
+  let isStill = moved < 4;
 
   if (isStill) {
     stillTimer += deltaTime;
   } else {
-    stillTimer   = 0;
+    stillTimer = 0;
     captureReady = false;
     captureBtn.removeClass('ready');
     instructionEl.removeClass('active');
   }
+
+  prevFrame = { x: wrist[0], y: wrist[1] };
 
   if (stillTimer >= STILL_NEEDED && !captureReady) {
     captureReady = true;
@@ -198,12 +241,10 @@ function checkStillness() {
       instructionEl.html(`Hold still... ${progress}%`);
       instructionEl.addClass('active');
     } else {
-      instructionEl.html('Hold still to capture your shadow creature');
+      instructionEl.html('Show your hand to capture a shadow creature');
       instructionEl.removeClass('active');
     }
   }
-
-  if (frameCount % 10 === 0) prevFrame = capture.get();
 }
 
 // ── Capture ────────────────────────────────────────────
