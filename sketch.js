@@ -135,7 +135,10 @@ function drawWebcamPreview() {
   translate(x + previewW, y);
   scale(-1, 1);
 
+  drawingContext.filter = 'invert(1)';
   tint(255, 30);
+  image(capture, 0, 0, previewW, previewH);
+  drawingContext.filter = 'none';
   image(capture, 0, 0, previewW, previewH);
   tint(255, 160);
   image(thresholdImg, 0, 0, previewW, previewH);
