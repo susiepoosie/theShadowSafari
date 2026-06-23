@@ -6,7 +6,7 @@ let thresholdImg;
 // Stillness detection
 let prevFrame;
 let stillTimer   = 0;
-const STILL_NEEDED = 2500;
+const STILL_NEEDED = 4000;
 let captureReady = false;
 
 // UI
@@ -177,17 +177,26 @@ function drawWebcamPreview() {
   translate(x + previewW, y);
   scale(-1, 1);
 
+  // Darker background fill so the hand silhouette pops
+  fill(20, 20, 22);
+  noStroke();
+  rect(0, 0, previewW, previewH);
+
+  // Webcam feed — slightly more visible
   drawingContext.filter = 'invert(1)';
-  tint(255, 30);
+  tint(255, 80);           // was 30
   image(capture, 0, 0, previewW, previewH);
   drawingContext.filter = 'none';
-  image(capture, 0, 0, previewW, previewH);
-  tint(255, 160);
+
+  // Threshold overlay — fully opaque so the silhouette is crisp
+  tint(255, 255);          // was 160
   image(thresholdImg, 0, 0, previewW, previewH);
+
   pop();
 
+  // Border
   noFill();
-  stroke(255, 25);
+  stroke(255, 60);         // was 25 — slightly brighter border
   strokeWeight(1);
   rect(20, height - previewH - 28, previewW, previewH);
 
@@ -217,7 +226,7 @@ function checkStillness() {
   }
 
   let moved = dist(wrist[0], wrist[1], prevFrame.x, prevFrame.y);
-  let isStill = moved < 4;
+  let isStill = moved < 12;
 
   if (isStill) {
     stillTimer += deltaTime;
