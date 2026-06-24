@@ -5,17 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Shadow Safari</title>
   <link rel="stylesheet" href="style.css" />
-
-  <!-- p5.js library -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.3/p5.min.js"></script>
+  <!-- ml5 1.x: handPose supports two hands (the old 0.12.2 was single-hand only) -->
+  <script src="https://unpkg.com/ml5@1/dist/ml5.min.js"></script>
 </head>
 <body>
   <div id="canvas-container"></div>
   <div id="ui">
-    <p id="instruction">Hold still to capture your shadow creature</p>
+    <p id="instruction">Show your hand(s) to capture a shadow creature</p>
     <button id="capture-btn">CAPTURE</button>
   </div>
-  <script src="https://unpkg.com/ml5@0.12.2/dist/ml5.min.js"></script>
   <script src="sketch.js"></script>
 </body>
 </html>
