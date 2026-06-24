@@ -1,28 +1,34 @@
-let handpose;
-let hands = [];
-let capture;
-let thresholdImg;
+// ════════════════════════════════════════════════════════
+//  SHADOW SAFARI — sketch.js  (fixed: calibration, lag, lighting)
+// ════════════════════════════════════════════════════════
 
-// Stillness detection
+let capture;
+
+// Persistent buffers (created ONCE, reused every frame) ──────
+let handGraphics;   // white hand silhouette, sized to the real webcam resolution
+let darkLayer;      // offscreen darkness layer we punch the torch hole into
+
 let prevFrame;
 let stillTimer   = 0;
 const STILL_NEEDED = 4000;
 let captureReady = false;
 
-// UI
 let instructionEl;
 let captureBtn;
 
-// Creatures
 let creatures = [];
 
-// ── Lighting state ─────────────────────────────────────
+let handpose;
+let hands = [];
+
 let lightX, lightY;
 const LIGHT_RADIUS   = 160;
 const FLEE_RADIUS    = 120;
 const VISIBLE_RADIUS = 250;
 
-// ── Setup ──────────────────────────────────────────────
+// How fast the torch chases the cursor. Higher = snappier (less perceived lag).
+const TORCH_EASE = 0.2;
+
 function setup() {
   let cnv = createCanvas(windowWidth, windowHeight);
   cnv.parent('canvas-container');
@@ -31,14 +37,8 @@ function setup() {
   capture.size(320, 240);
   capture.hide();
 
-  handpose = ml5.handpose(capture, () => {
-    console.log('HandPose ready');
-  });
-  handpose.on('predict', results => {
-    hands = results;
-  });
-
-  thresholdImg = createImage(320, 240);
+  // darkness layer matches the canvas; recreated on resize
+  darkLayer = createGraphics(width, height);
 
   instructionEl = select('#instruction');
   captureBtn    = select('#capture-btn');
@@ -48,125 +48,138 @@ function setup() {
 
   lightX = width  / 2;
   lightY = height / 2;
+
+  handpose = ml5.handpose(capture, () => {
+    console.log('HandPose ready');
+  });
+  handpose.on('predict', results => {
+    hands = results;
+  });
 }
 
-// ── Main draw loop ─────────────────────────────────────
 function draw() {
   background(45, 42, 48);
 
-  lightX = lerp(lightX, mouseX, 0.12);
-  lightY = lerp(lightY, mouseY, 0.12);
+  lightX = lerp(lightX, mouseX, TORCH_EASE);
+  lightY = lerp(lightY, mouseY, TORCH_EASE);
 
   if (capture.loadedmetadata) {
     processWebcam();
     checkStillness();
   }
 
+  // creatures render onto the MAIN canvas first…
   for (let c of creatures) {
     c.update();
     c.draw();
   }
 
+  // …then the darkness layer is overlaid, so its torch-hole REVEALS them.
   drawDarknessOverlay();
 
   if (capture.loadedmetadata) drawWebcamPreview();
 }
 
-// ── Webcam processing ──────────────────────────────────
+// ────────────────────────────────────────────────────────
+//  Hand silhouette — reuses ONE buffer, sized to the real
+//  webcam resolution so landmarks map 1:1 (calibration fix),
+//  and fills the hand with thick fingers (no thin slivers).
+// ────────────────────────────────────────────────────────
 function processWebcam() {
-  thresholdImg.loadPixels();
-
-  // Clear to transparent
-  for (let i = 0; i < thresholdImg.pixels.length; i += 4) {
-    thresholdImg.pixels[i]     = 0;
-    thresholdImg.pixels[i + 1] = 0;
-    thresholdImg.pixels[i + 2] = 0;
-    thresholdImg.pixels[i + 3] = 0;
+  // (re)create the buffer only if the real resolution changed
+  if (!handGraphics || handGraphics.width !== capture.width) {
+    if (handGraphics) handGraphics.remove();
+    handGraphics = createGraphics(capture.width, capture.height);
   }
-  thresholdImg.updatePixels();
 
+  handGraphics.clear();              // cheap — no per-frame allocation
   if (hands.length === 0) return;
 
-  // Draw filled hand silhouette onto thresholdImg using a graphics buffer
-  let g = createGraphics(320, 240);
-  g.noStroke();
-  g.fill(255);
+  // thickness scales with resolution so the silhouette always fits the hand
+  const fingerW  = capture.width * 0.075;
+  const jointD   = capture.width * 0.07;
 
   for (let hand of hands) {
     let kp = hand.landmarks;
 
-    // Draw filled palm
-    g.beginShape();
-    // Wrist and base knuckles form the palm outline
-    let palmPoints = [0, 1, 5, 9, 13, 17];
-    for (let i of palmPoints) {
-      g.vertex(kp[i][0], kp[i][1]);
+    // palm
+    handGraphics.noStroke();
+    handGraphics.fill(255);
+    handGraphics.beginShape();
+    for (let i of [0, 1, 5, 9, 13, 17]) {
+      handGraphics.vertex(kp[i][0], kp[i][1]);
     }
-    g.endShape(CLOSE);
+    handGraphics.endShape(CLOSE);
 
-    // Draw each finger as a filled shape
+    // fingers as thick, round-capped strokes (instead of closed slivers)
+    handGraphics.noFill();
+    handGraphics.stroke(255);
+    handGraphics.strokeWeight(fingerW);
+    handGraphics.strokeCap(ROUND);
+    handGraphics.strokeJoin(ROUND);
+
     let fingers = [
-      [1, 2, 3, 4],       // thumb
-      [5, 6, 7, 8],       // index
-      [9, 10, 11, 12],    // middle
-      [13, 14, 15, 16],   // ring
-      [17, 18, 19, 20],   // pinky
+      [0, 1, 2, 3, 4],   // thumb (anchored at wrist)
+      [5, 6, 7, 8],      // index
+      [9, 10, 11, 12],   // middle
+      [13, 14, 15, 16],  // ring
+      [17, 18, 19, 20],  // pinky
     ];
+    for (let f of fingers) {
+      handGraphics.beginShape();
+      for (let i of f) handGraphics.vertex(kp[i][0], kp[i][1]);
+      handGraphics.endShape();
+    }
 
-    for (let finger of fingers) {
-      g.beginShape();
-      for (let i of finger) {
-        g.vertex(kp[i][0], kp[i][1]);
-      }
-      g.endShape(CLOSE);
+    // round every joint to bridge palm↔finger gaps and smooth knuckles
+    handGraphics.noStroke();
+    handGraphics.fill(255);
+    for (let i = 0; i < kp.length; i++) {
+      handGraphics.circle(kp[i][0], kp[i][1], jointD);
     }
   }
-
-  // Copy graphics buffer into thresholdImg
-  let gImg = g.get();
-  gImg.loadPixels();
-  thresholdImg.loadPixels();
-  for (let i = 0; i < thresholdImg.pixels.length; i += 4) {
-    thresholdImg.pixels[i]     = 255;
-    thresholdImg.pixels[i + 1] = 255;
-    thresholdImg.pixels[i + 2] = 255;
-    thresholdImg.pixels[i + 3] = gImg.pixels[i + 3] > 0 ? 220 : 0;
-  }
-  thresholdImg.updatePixels();
-  g.remove();
 }
 
-// ── Darkness overlay with flashlight cut-out ───────────
+// ────────────────────────────────────────────────────────
+//  Darkness — built on its OWN layer, hole punched there,
+//  then overlaid. The hole reveals creatures instead of
+//  erasing them (lighting fix). Warm glow added on top.
+// ────────────────────────────────────────────────────────
 function drawDarknessOverlay() {
+  let dctx = darkLayer.drawingContext;
+
+  darkLayer.clear();
+  dctx.save();
+
+  dctx.fillStyle = 'rgba(45, 42, 48, 0.82)';
+  dctx.fillRect(0, 0, width, height);
+
+  dctx.globalCompositeOperation = 'destination-out';
+  let hole = dctx.createRadialGradient(lightX, lightY, 0, lightX, lightY, LIGHT_RADIUS);
+  hole.addColorStop(0,   'rgba(0,0,0,1)');
+  hole.addColorStop(0.6, 'rgba(0,0,0,1)');
+  hole.addColorStop(1,   'rgba(0,0,0,0)');
+  dctx.fillStyle = hole;
+  dctx.fillRect(0, 0, width, height);
+
+  dctx.restore();
+
+  // overlay darkness onto the scene — hole = lit creatures show through
+  image(darkLayer, 0, 0);
+
+  // warm amber glow, painted on the main canvas above everything
   let ctx = drawingContext;
-
   ctx.save();
-
-  ctx.fillStyle = 'rgba(45, 42, 48, 0.82)';
-  ctx.fillRect(0, 0, width, height);
-
-  ctx.globalCompositeOperation = 'destination-out';
-  let hole = ctx.createRadialGradient(lightX, lightY, 0, lightX, lightY, LIGHT_RADIUS);
-  hole.addColorStop(0,    'rgba(0,0,0,1)');
-  hole.addColorStop(0.5,  'rgba(0,0,0,1)');
-  hole.addColorStop(1,    'rgba(0,0,0,0)');
-  ctx.fillStyle = hole;
-  ctx.fillRect(0, 0, width, height);
-
-  ctx.globalCompositeOperation = 'source-over';
-
   let glow = ctx.createRadialGradient(lightX, lightY, 0, lightX, lightY, LIGHT_RADIUS);
-  glow.addColorStop(0,    'rgba(255,220,100,0.18)');
-  glow.addColorStop(0.4,  'rgba(255,160,40,0.08)');
-  glow.addColorStop(0.7,  'rgba(180,80,10,0.03)');
-  glow.addColorStop(1,    'rgba(0,0,0,0)');
+  glow.addColorStop(0,   'rgba(255,220,100,0.15)');
+  glow.addColorStop(0.4, 'rgba(255,160,40,0.07)');
+  glow.addColorStop(0.7, 'rgba(180,80,10,0.03)');
+  glow.addColorStop(1,   'rgba(0,0,0,0)');
   ctx.fillStyle = glow;
   ctx.fillRect(0, 0, width, height);
-
   ctx.restore();
 }
 
-// ── Webcam preview ─────────────────────────────────────
 function drawWebcamPreview() {
   push();
   let previewW = 200;
@@ -177,26 +190,22 @@ function drawWebcamPreview() {
   translate(x + previewW, y);
   scale(-1, 1);
 
-  // Darker background fill so the hand silhouette pops
   fill(20, 20, 22);
   noStroke();
   rect(0, 0, previewW, previewH);
 
-  // Webcam feed — slightly more visible
   drawingContext.filter = 'invert(1)';
-  tint(255, 80);           // was 30
+  tint(255, 80);
   image(capture, 0, 0, previewW, previewH);
   drawingContext.filter = 'none';
 
-  // Threshold overlay — fully opaque so the silhouette is crisp
-  tint(255, 255);          // was 160
-  image(thresholdImg, 0, 0, previewW, previewH);
+  tint(255, 255);
+  if (handGraphics) image(handGraphics, 0, 0, previewW, previewH);
 
   pop();
 
-  // Border
   noFill();
-  stroke(255, 60);         // was 25 — slightly brighter border
+  stroke(255, 60);
   strokeWeight(1);
   rect(20, height - previewH - 28, previewW, previewH);
 
@@ -207,7 +216,6 @@ function drawWebcamPreview() {
   text('CAPTURE WINDOW', 20, height - 10);
 }
 
-// ── Stillness detection ────────────────────────────────
 function checkStillness() {
   if (hands.length === 0) {
     stillTimer = 0;
@@ -218,7 +226,6 @@ function checkStillness() {
     return;
   }
 
-  // Use wrist position (landmark 0) to check for stillness
   let wrist = hands[0].landmarks[0];
   if (!prevFrame) {
     prevFrame = { x: wrist[0], y: wrist[1] };
@@ -231,10 +238,12 @@ function checkStillness() {
   if (isStill) {
     stillTimer += deltaTime;
   } else {
-    stillTimer = 0;
-    captureReady = false;
-    captureBtn.removeClass('ready');
-    instructionEl.removeClass('active');
+    stillTimer = max(0, stillTimer - deltaTime * 2);
+    if (stillTimer === 0) {
+      captureReady = false;
+      captureBtn.removeClass('ready');
+      instructionEl.removeClass('active');
+    }
   }
 
   prevFrame = { x: wrist[0], y: wrist[1] };
@@ -256,11 +265,10 @@ function checkStillness() {
   }
 }
 
-// ── Capture ────────────────────────────────────────────
 function captureCreature() {
-  if (!captureReady) return;
+  if (!captureReady || !handGraphics) return;
 
-  let snapshot = thresholdImg.get();
+  let snapshot = handGraphics.get();
   let spawnX = random(width  * 0.2, width  * 0.8);
   let spawnY = random(height * 0.2, height * 0.8);
   creatures.push(new Creature(snapshot, spawnX, spawnY));
@@ -271,19 +279,16 @@ function captureCreature() {
   instructionEl.html('Shadow released into the wild…');
 
   setTimeout(() => {
-    instructionEl.html('Hold still to capture your shadow creature');
+    instructionEl.html('Show your hand to capture a shadow creature');
     instructionEl.removeClass('active');
   }, 2000);
 }
 
-// ── Resize ─────────────────────────────────────────────
 function windowResized() {
   resizeCanvas(windowWidth, windowHeight);
+  darkLayer = createGraphics(width, height);   // keep darkness layer in sync
 }
 
-// ════════════════════════════════════════════════════════
-//  CREATURE CLASS
-// ════════════════════════════════════════════════════════
 class Creature {
   constructor(img, x, y) {
     this.img     = img;
@@ -335,11 +340,10 @@ class Creature {
     }
 
     switch (this.state) {
-
       case 'idle':
-        let n  = noise(this.x * 0.002 + this.noiseOffset,
-                       this.y * 0.002,
-                       frameCount * 0.0008);
+        let n = noise(this.x * 0.002 + this.noiseOffset,
+                      this.y * 0.002,
+                      frameCount * 0.0008);
         let angle = n * TWO_PI * 2;
         this.vx = lerp(this.vx, cos(angle) * 0.4, 0.02);
         this.vy = lerp(this.vy, sin(angle) * 0.4, 0.02);
