@@ -1,6 +1,6 @@
 // ════════════════════════════════════════════════════════
 //  SHADOW SAFARI — sketch.js
-//  free roaming · motion-gated fleeing · curious creatures
+//  slit eyes · tapering tentacles · 20% curious
 // ════════════════════════════════════════════════════════
 
 let capture;
@@ -11,7 +11,7 @@ let creatureBuffer;
 
 let prevFrame;
 let stillTimer    = 0;
-const STILL_NEEDED = 2000;   // ms of stillness before auto-capture (faster)
+const STILL_NEEDED = 2000;
 let armed         = true;
 
 let instructionEl;
@@ -29,18 +29,17 @@ const LIGHT_RADIUS   = 160;
 const FLEE_RADIUS    = 120;
 const VISIBLE_RADIUS = 250;
 
-// cursor motion — creatures only flee while the cursor is moving
 let cursorMoving    = false;
 let lastCursorMoveT = 0;
-const CURSOR_MOVE_THRESH  = 1.5;   // px/frame to count as "moving"
-const CURSOR_MOVE_LINGER  = 180;   // ms of grace before "stopped"
+const CURSOR_MOVE_THRESH  = 1.5;
+const CURSOR_MOVE_LINGER  = 180;
 
 const TORCH_EASE   = 0.2;
 const TARGET_SIZE  = 200;
 const BUF          = 340;
 
 const FIST_EXTENSION = 1.6;
-const CURIOUS_CHANCE = 0.30;   // chance a new creature approaches the cursor
+const CURIOUS_CHANCE = 0.20;   // chance a new creature approaches the cursor
 
 const PERSONALITIES = {
   sea: {
@@ -50,6 +49,7 @@ const PERSONALITIES = {
     jolt: 0,         jitter: 0,
     wig: { idle: 0.13, flee: 0.18 }, spd: { idle: 1.6, flee: 3.0 },
     bodyWobble: 0.06, breathe: 0.04,
+    taper: true,                       // tentacles taper toward the tips
   },
   land: {
     sizeMul: 1.0,
@@ -58,6 +58,7 @@ const PERSONALITIES = {
     jolt: 0.012,     jitter: 0.4,
     wig: { idle: 0.10, flee: 0.16 }, spd: { idle: 3.0, flee: 7.0 },
     bodyWobble: 0.05, breathe: 0.03,
+    taper: false,
   },
   bug: {
     sizeMul: 0.62,
@@ -66,6 +67,7 @@ const PERSONALITIES = {
     jolt: 0.04,      jitter: 1.4,
     wig: { idle: 0.07, flee: 0.12 }, spd: { idle: 7.0, flee: 12.0 },
     bodyWobble: 0.04, breathe: 0.02,
+    taper: false,
   },
 };
 
@@ -137,7 +139,6 @@ function draw() {
   lightX = lerp(lightX, mouseX, TORCH_EASE);
   lightY = lerp(lightY, mouseY, TORCH_EASE);
 
-  // is the cursor actively moving?
   let cs = dist(mouseX, mouseY, pmouseX, pmouseY);
   if (cs > CURSOR_MOVE_THRESH) lastCursorMoveT = millis();
   cursorMoving = (millis() - lastCursorMoveT) < CURSOR_MOVE_LINGER;
@@ -350,7 +351,7 @@ class Creature {
     this.type    = type;
     this.p       = PERSONALITIES[type];
 
-    this.curious = random() < CURIOUS_CHANCE;   // ~30% approach the cursor
+    this.curious = random() < CURIOUS_CHANCE;
 
     this.x  = x;
     this.y  = y;
@@ -361,13 +362,30 @@ class Creature {
     this.opacity       = 0;
     this.targetOpacity = 180;
 
-    this.heading    = random(TWO_PI);   // unbiased roaming direction
+    this.heading    = random(TWO_PI);
     this.wanderSeed = random(1000);
     this.phase      = random(TWO_PI);
 
     this.fleeTargetX = x;
     this.fleeTargetY = y;
     this.stateTimer  = 0;
+
+    this.setupEyes();
+  }
+
+  // eyes face along the wrist→finger axis of the first captured hand
+  setupEyes() {
+    let h = this.hands[0];
+    let p0 = h[0], p9 = h[9], p5 = h[5], p17 = h[17];
+    let fa = atan2(p9.y - p0.y, p9.x - p0.x);
+    let pw = dist(p5.x, p5.y, p17.x, p17.y) || 30;
+
+    this.forwardAngle = fa;
+    this.eyeCx    = p9.x + cos(fa) * pw * 0.15;
+    this.eyeCy    = p9.y + sin(fa) * pw * 0.15;
+    this.eyeSep   = pw * 0.5;
+    this.slitLen  = pw * 0.24;
+    this.slitThick = this.slitLen * 0.3;
   }
 
   update() {
@@ -375,7 +393,6 @@ class Creature {
     this.stateTimer += deltaTime;
     let d = dist(lightX, lightY, this.x, this.y);
 
-    // relax out of flee the moment the cursor goes still
     if (this.state === 'fleeing' && !cursorMoving && this.stateTimer > 200) {
       this.state = 'idle';
       this.stateTimer = 0;
@@ -420,9 +437,7 @@ class Creature {
       this.targetOpacity = 120;
 
     } else {
-      // idle or illuminated
       if (this.curious) {
-        // slowly creep toward the cursor, hover when close
         let ax = lightX - this.x, ay = lightY - this.y;
         let mg = sqrt(ax * ax + ay * ay);
         if (mg > 40) {
@@ -433,13 +448,11 @@ class Creature {
           this.vy = lerp(this.vy, 0, 0.08);
         }
       } else {
-        // free roaming via a smooth heading random-walk (no directional bias)
         this.heading += (noise(this.wanderSeed, frameCount * 0.01) - 0.5) * 0.4;
         this.vx = lerp(this.vx, cos(this.heading) * P.idleSpeed, P.idleEase);
         this.vy = lerp(this.vy, sin(this.heading) * P.idleSpeed, P.idleEase);
       }
 
-      // steer back toward center when nearing an edge
       let m = 130;
       if (this.x < m || this.x > width - m || this.y < m || this.y > height - m) {
         let toC = atan2(height / 2 - this.y, width / 2 - this.x);
@@ -450,7 +463,6 @@ class Creature {
       this.targetOpacity = (this.state === 'illuminated') ? 200 : 180;
     }
 
-    // sudden jolts (land) / darts (bug); never while fleeing, never for sea
     if (this.state !== 'fleeing' && P.jolt > 0 && random() < P.jolt) {
       let a = random(TWO_PI);
       let kick = P.idleSpeed * random(5, 11);
@@ -503,7 +515,37 @@ class Creature {
     return out;
   }
 
+  drawFinger(g, pts, chain) {
+    if (this.p.taper) {
+      // segment-by-segment, width shrinking toward the tip
+      let n = chain.length;
+      g.noStroke();
+      for (let j = 1; j < n; j++) {
+        let a = pts[chain[j - 1]], b = pts[chain[j]];
+        let wA = lerp(this.fingerW, this.fingerW * 0.18, (j - 1) / (n - 1));
+        let wB = lerp(this.fingerW, this.fingerW * 0.18,  j      / (n - 1));
+        g.stroke(255);
+        g.strokeWeight((wA + wB) / 2);
+        g.line(a.x, a.y, b.x, b.y);
+        g.noStroke();
+        g.fill(255);
+        g.circle(b.x, b.y, wB);          // round each joint to the local width
+      }
+    } else {
+      g.noFill();
+      g.stroke(255);
+      g.strokeWeight(this.fingerW);
+      g.beginShape();
+      for (let i of chain) g.vertex(pts[i].x, pts[i].y);
+      g.endShape();
+    }
+  }
+
   drawSilhouette(g, pts) {
+    g.strokeCap(ROUND);
+    g.strokeJoin(ROUND);
+
+    // rounded body
     g.noStroke();
     g.fill(255);
     let mcx = (pts[0].x + pts[9].x) / 2;
@@ -515,17 +557,19 @@ class Creature {
     for (let i of [0, 1, 5, 9, 13, 17]) g.vertex(pts[i].x, pts[i].y);
     g.endShape(CLOSE);
 
-    g.noFill();
-    g.stroke(255);
-    g.strokeWeight(this.fingerW);
-    g.strokeCap(ROUND);
-    g.strokeJoin(ROUND);
     const fingers = [[1,2,3,4],[5,6,7,8],[9,10,11,12],[13,14,15,16],[17,18,19,20]];
-    for (let f of fingers) {
-      g.beginShape();
-      for (let i of f) g.vertex(pts[i].x, pts[i].y);
-      g.endShape();
-    }
+    for (let f of fingers) this.drawFinger(g, pts, f);
+  }
+
+  drawEyes() {
+    push();
+    translate(this.eyeCx, this.eyeCy);
+    rotate(this.forwardAngle);
+    noStroke();
+    fill(238, 232, 242, this.opacity);
+    ellipse(0, -this.eyeSep / 2, this.slitThick, this.slitLen);
+    ellipse(0,  this.eyeSep / 2, this.slitThick, this.slitLen);
+    pop();
   }
 
   draw() {
@@ -536,11 +580,10 @@ class Creature {
     if (this.state === 'fleeing')     { wig = P.wig.flee; spd = P.spd.flee; }
     else if (this.state === 'hidden') { wig *= 0.6;       spd *= 0.7; }
 
+    // buffer holds the animated silhouette only (breathing/wobble applied below)
     creatureBuffer.clear();
     creatureBuffer.push();
     creatureBuffer.translate(BUF / 2, BUF / 2);
-    creatureBuffer.scale(1 + P.breathe * sin(t * 1.3 + this.phase));
-    creatureBuffer.rotate(P.bodyWobble * sin(t * 0.8 + this.phase));
     for (let hand of this.hands) {
       this.drawSilhouette(creatureBuffer, this.animatedHand(hand, t, wig, spd));
     }
@@ -548,21 +591,29 @@ class Creature {
 
     let jx = P.jitter ? random(-P.jitter, P.jitter) : 0;
     let jy = P.jitter ? random(-P.jitter, P.jitter) : 0;
+    let breath = 1 + P.breathe * sin(t * 1.3 + this.phase);
+    let wob    = P.bodyWobble * sin(t * 0.8 + this.phase);
 
     push();
     translate(this.x + jx, this.y + jy);
     scale(P.sizeMul);
+    scale(breath);
+    rotate(wob);
+
+    // dark, torch-brightened body
     imageMode(CENTER);
     drawingContext.globalCompositeOperation = 'multiply';
-
     let d = dist(lightX, lightY, this.x, this.y);
     let litAmount = d < VISIBLE_RADIUS ? map(d, 0, VISIBLE_RADIUS, 1, 0) : 0;
     let brightness = lerp(60, 120, litAmount);
     tint(brightness, brightness, brightness, this.opacity);
-
     image(creatureBuffer, 0, 0);
 
+    // light slit eyes on top, in the same local frame
     drawingContext.globalCompositeOperation = 'source-over';
+    noTint();
+    this.drawEyes();
+
     pop();
   }
 }
