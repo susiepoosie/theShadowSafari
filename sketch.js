@@ -1,17 +1,17 @@
 // ════════════════════════════════════════════════════════
 //  SHADOW SAFARI — sketch.js
-//  hand memory · darkening preview · living creatures w/ personalities
+//  free roaming · motion-gated fleeing · curious creatures
 // ════════════════════════════════════════════════════════
 
 let capture;
 
-let handGraphics;   // live white silhouette (preview), sized to webcam resolution
-let darkLayer;      // offscreen darkness layer for the torch hole
-let creatureBuffer; // shared scratch buffer to flatten each animated creature
+let handGraphics;
+let darkLayer;
+let creatureBuffer;
 
 let prevFrame;
 let stillTimer    = 0;
-const STILL_NEEDED = 4000;
+const STILL_NEEDED = 2000;   // ms of stillness before auto-capture (faster)
 let armed         = true;
 
 let instructionEl;
@@ -29,16 +29,21 @@ const LIGHT_RADIUS   = 160;
 const FLEE_RADIUS    = 120;
 const VISIBLE_RADIUS = 250;
 
+// cursor motion — creatures only flee while the cursor is moving
+let cursorMoving    = false;
+let lastCursorMoveT = 0;
+const CURSOR_MOVE_THRESH  = 1.5;   // px/frame to count as "moving"
+const CURSOR_MOVE_LINGER  = 180;   // ms of grace before "stopped"
+
 const TORCH_EASE   = 0.2;
-const TARGET_SIZE  = 200;   // baked size; per-personality sizeMul scales the blit
+const TARGET_SIZE  = 200;
 const BUF          = 340;
 
-// fist vs open-hand cutoff (avg fingertip-to-wrist / palm length)
 const FIST_EXTENSION = 1.6;
+const CURIOUS_CHANCE = 0.30;   // chance a new creature approaches the cursor
 
-// ── personality parameter sets ──────────────────────────
 const PERSONALITIES = {
-  sea: {                         // two hands: big, slow, graceful
+  sea: {
     sizeMul: 1.5,
     idleSpeed: 0.25, idleEase: 0.012,
     fleeSpeed: 2.6,  fleeEase: 0.06,
@@ -46,7 +51,7 @@ const PERSONALITIES = {
     wig: { idle: 0.13, flee: 0.18 }, spd: { idle: 1.6, flee: 3.0 },
     bodyWobble: 0.06, breathe: 0.04,
   },
-  land: {                        // one open hand: medium, jagged, jolting
+  land: {
     sizeMul: 1.0,
     idleSpeed: 0.5,  idleEase: 0.06,
     fleeSpeed: 4.5,  fleeEase: 0.14,
@@ -54,7 +59,7 @@ const PERSONALITIES = {
     wig: { idle: 0.10, flee: 0.16 }, spd: { idle: 3.0, flee: 7.0 },
     bodyWobble: 0.05, breathe: 0.03,
   },
-  bug: {                         // fist / cluster: small, fast, jittery
+  bug: {
     sizeMul: 0.62,
     idleSpeed: 0.9,  idleEase: 0.15,
     fleeSpeed: 6.5,  fleeEase: 0.22,
@@ -115,7 +120,6 @@ function getActiveHands() {
   return out;
 }
 
-// decide which personality a captured shape becomes
 function classifyHands(hands) {
   if (hands.length >= 2) return 'sea';
   let kp = hands[0].keypoints;
@@ -132,6 +136,11 @@ function draw() {
 
   lightX = lerp(lightX, mouseX, TORCH_EASE);
   lightY = lerp(lightY, mouseY, TORCH_EASE);
+
+  // is the cursor actively moving?
+  let cs = dist(mouseX, mouseY, pmouseX, pmouseY);
+  if (cs > CURSOR_MOVE_THRESH) lastCursorMoveT = millis();
+  cursorMoving = (millis() - lastCursorMoveT) < CURSOR_MOVE_LINGER;
 
   if (capture.loadedmetadata) {
     activeHands = getActiveHands();
@@ -341,6 +350,8 @@ class Creature {
     this.type    = type;
     this.p       = PERSONALITIES[type];
 
+    this.curious = random() < CURIOUS_CHANCE;   // ~30% approach the cursor
+
     this.x  = x;
     this.y  = y;
     this.vx = random(-0.3, 0.3);
@@ -350,8 +361,9 @@ class Creature {
     this.opacity       = 0;
     this.targetOpacity = 180;
 
-    this.noiseOffset = random(1000);
-    this.phase       = random(TWO_PI);
+    this.heading    = random(TWO_PI);   // unbiased roaming direction
+    this.wanderSeed = random(1000);
+    this.phase      = random(TWO_PI);
 
     this.fleeTargetX = x;
     this.fleeTargetY = y;
@@ -361,10 +373,15 @@ class Creature {
   update() {
     let P = this.p;
     this.stateTimer += deltaTime;
-
     let d = dist(lightX, lightY, this.x, this.y);
 
-    if (d < FLEE_RADIUS) {
+    // relax out of flee the moment the cursor goes still
+    if (this.state === 'fleeing' && !cursorMoving && this.stateTimer > 200) {
+      this.state = 'idle';
+      this.stateTimer = 0;
+    }
+
+    if (d < FLEE_RADIUS && cursorMoving) {
       if (this.state !== 'fleeing') {
         this.state = 'fleeing';
         this.stateTimer = 0;
@@ -387,44 +404,54 @@ class Creature {
       }
     }
 
-    switch (this.state) {
-      case 'idle': {
-        let nz = noise(this.x * 0.002 + this.noiseOffset,
-                       this.y * 0.002,
-                       frameCount * 0.0008);
-        let angle = nz * TWO_PI * 2;
-        this.vx = lerp(this.vx, cos(angle) * P.idleSpeed, P.idleEase);
-        this.vy = lerp(this.vy, sin(angle) * P.idleSpeed, P.idleEase);
-        this.targetOpacity = 180;
-        break;
+    if (this.state === 'fleeing') {
+      let fx = this.fleeTargetX - this.x;
+      let fy = this.fleeTargetY - this.y;
+      let mag = sqrt(fx * fx + fy * fy);
+      if (mag > 1) {
+        this.vx = lerp(this.vx, (fx / mag) * P.fleeSpeed, P.fleeEase);
+        this.vy = lerp(this.vy, (fy / mag) * P.fleeSpeed, P.fleeEase);
       }
-      case 'illuminated':
-        this.vx = lerp(this.vx, random(-P.idleSpeed, P.idleSpeed) * 0.5, P.idleEase * 2);
-        this.vy = lerp(this.vy, random(-P.idleSpeed, P.idleSpeed) * 0.5, P.idleEase * 2);
-        this.targetOpacity = 200;
-        break;
+      this.targetOpacity = this.stateTimer < 400 ? 220 : 160;
 
-      case 'fleeing': {
-        let fx  = this.fleeTargetX - this.x;
-        let fy  = this.fleeTargetY - this.y;
-        let mag = sqrt(fx * fx + fy * fy);
-        if (mag > 1) {
-          this.vx = lerp(this.vx, (fx / mag) * P.fleeSpeed, P.fleeEase);
-          this.vy = lerp(this.vy, (fy / mag) * P.fleeSpeed, P.fleeEase);
+    } else if (this.state === 'hidden') {
+      this.vx = lerp(this.vx, 0, 0.05);
+      this.vy = lerp(this.vy, 0, 0.05);
+      this.targetOpacity = 120;
+
+    } else {
+      // idle or illuminated
+      if (this.curious) {
+        // slowly creep toward the cursor, hover when close
+        let ax = lightX - this.x, ay = lightY - this.y;
+        let mg = sqrt(ax * ax + ay * ay);
+        if (mg > 40) {
+          this.vx = lerp(this.vx, (ax / mg) * P.idleSpeed * 1.1, P.idleEase * 1.6);
+          this.vy = lerp(this.vy, (ay / mg) * P.idleSpeed * 1.1, P.idleEase * 1.6);
+        } else {
+          this.vx = lerp(this.vx, 0, 0.08);
+          this.vy = lerp(this.vy, 0, 0.08);
         }
-        this.targetOpacity = this.stateTimer < 400 ? 220 : 160;
-        break;
+      } else {
+        // free roaming via a smooth heading random-walk (no directional bias)
+        this.heading += (noise(this.wanderSeed, frameCount * 0.01) - 0.5) * 0.4;
+        this.vx = lerp(this.vx, cos(this.heading) * P.idleSpeed, P.idleEase);
+        this.vy = lerp(this.vy, sin(this.heading) * P.idleSpeed, P.idleEase);
       }
-      case 'hidden':
-        this.vx = lerp(this.vx, 0, 0.05);
-        this.vy = lerp(this.vy, 0, 0.05);
-        this.targetOpacity = 120;
-        break;
+
+      // steer back toward center when nearing an edge
+      let m = 130;
+      if (this.x < m || this.x > width - m || this.y < m || this.y > height - m) {
+        let toC = atan2(height / 2 - this.y, width / 2 - this.x);
+        let diff = atan2(sin(toC - this.heading), cos(toC - this.heading));
+        this.heading += diff * 0.08;
+      }
+
+      this.targetOpacity = (this.state === 'illuminated') ? 200 : 180;
     }
 
-    // sudden jolts (land) / frequent darts (bug); sea has none
-    if ((this.state === 'idle' || this.state === 'illuminated') &&
-        P.jolt > 0 && random() < P.jolt) {
+    // sudden jolts (land) / darts (bug); never while fleeing, never for sea
+    if (this.state !== 'fleeing' && P.jolt > 0 && random() < P.jolt) {
       let a = random(TWO_PI);
       let kick = P.idleSpeed * random(5, 11);
       this.vx += cos(a) * kick;
@@ -434,11 +461,9 @@ class Creature {
     this.x += this.vx;
     this.y += this.vy;
 
-    let margin = 120;
-    if (this.x < margin)          this.vx += 0.4;
-    if (this.x > width - margin)  this.vx -= 0.4;
-    if (this.y < margin)          this.vy += 0.4;
-    if (this.y > height - margin) this.vy -= 0.4;
+    let hard = 40;
+    this.x = constrain(this.x, hard, width  - hard);
+    this.y = constrain(this.y, hard, height - hard);
 
     this.opacity = lerp(this.opacity, this.targetOpacity, 0.04);
   }
