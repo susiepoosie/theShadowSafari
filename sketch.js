@@ -66,6 +66,7 @@ let storyWords = [];        // laid-out {word, x, y}
 // naming a captured worry
 let labelingCreature = null;
 let labelBuffer = '';
+let hoveredCreature = null;   // creature currently under the cursor
 
 let handpose;
 let handMemory = {};
@@ -298,11 +299,15 @@ function drawSunOverlay() {
   // announcement
   noStroke();
   textAlign(CENTER, CENTER);
-  textFont('Courier New');
+  textFont('Georgia');
+  textStyle(ITALIC);
+  let pulse = 0.85 + 0.15 * sin(millis() * 0.006);
   textSize(34);
-  let pulse = 0.7 + 0.3 * sin(millis() * 0.01);
-  fill(255, 170, 40, 210 * pulse + 30);
-  text('THE SUN IS OUT!', width / 2, height * 0.26);
+  fill(255, 255, 255, 120 * pulse);                 // soft halo
+  text("you've found the light of your life!", width / 2 + 1, height * 0.27 + 1);
+  fill(150, 80, 15, 235);                            // warm readable text
+  text("you've found the light of your life!", width / 2, height * 0.27);
+  textStyle(NORMAL);
   pop();
   sunFlashAmount *= 0.9;
 }
@@ -345,21 +350,107 @@ function drawStory() {
   pop();
 }
 
+// custom cursor: a lit matchstick, or a question mark when over a creature
+function drawCursor() {
+  let mx = mouseX, my = mouseY;
+
+  if (hoveredCreature) {
+    // the worry whispers (only while still unnamed)
+    if (!hoveredCreature.label) {
+      let c = hoveredCreature;
+      let oy = c.y - 90 * c.drawSize - 16;
+      push();
+      textAlign(CENTER, BOTTOM);
+      textFont('Georgia');
+      textStyle(ITALIC);
+      textSize(14);
+      fill(255, 236, 205, 205);
+      text('"i\'m just a dark cloud in your mind.\nname me, then let me go."', c.x, oy);
+      textStyle(NORMAL);
+      pop();
+    }
+    // question-mark cursor
+    push();
+    textAlign(CENTER, CENTER);
+    textFont('Georgia');
+    textStyle(BOLD);
+    textSize(30);
+    let fl = 0.85 + 0.15 * sin(millis() * 0.012);
+    fill(255, 150, 30, 90);
+    text('?', mx, my + 1);
+    fill(255, 225, 150, 240 * fl);
+    text('?', mx, my);
+    textStyle(NORMAL);
+    pop();
+    return;
+  }
+
+  drawMatchCursor(mx, my);
+}
+
+function drawMatchCursor(mx, my) {
+  push();
+  // wooden stick angling down-right from the flame
+  stroke(150, 112, 74);
+  strokeWeight(3);
+  strokeCap(ROUND);
+  line(mx + 2, my + 4, mx + 17, my + 31);
+  // charred head
+  noStroke();
+  fill(60, 45, 40);
+  ellipse(mx + 2, my + 4, 6, 6);
+  // flickering flame at the tip (the light source)
+  let fl = 1 + 0.18 * sin(millis() * 0.025);
+  fill(255, 150, 30, 110);
+  ellipse(mx, my, 16 * fl, 22 * fl);
+  fill(255, 210, 90, 200);
+  ellipse(mx, my - 1, 8 * fl, 14 * fl);
+  fill(255, 248, 210, 235);
+  ellipse(mx, my - 1, 4, 8 * fl);
+  pop();
+}
+
 function drawLabelPrompt() {
   if (!labelingCreature) return;
   push();
+
+  // dim the scene to focus attention
+  rectMode(CORNER);
+  noStroke();
+  fill(18, 16, 22, 120);
+  rect(0, 0, width, height);
+
+  // centered panel
+  let pw = min(480, width - 50), ph = 180;
+  let cx = width / 2, cy = height * 0.5;
+  rectMode(CENTER);
+  fill(28, 26, 32, 242);
+  stroke(255, 200, 120, 150);
+  strokeWeight(1.5);
+  rect(cx, cy, pw, ph, 16);
+
+  noStroke();
   textAlign(CENTER, CENTER);
   textFont('Georgia');
-  noStroke();
-  let y = height - 64;
-  let shown = labelBuffer.length ? labelBuffer : '…';
-  let caret = frameCount % 60 < 30 ? '|' : ' ';
-  textSize(14);
-  fill(255, 236, 205, 210);
-  text('name this worry:  ' + shown + caret, width / 2, y);
-  textSize(10);
-  fill(255, 236, 205, 120);
-  text('enter to trap it · esc to let it go', width / 2, y + 24);
+
+  // title
+  fill(255, 236, 205, 230);
+  textSize(17);
+  text('name this worry', cx, cy - ph / 2 + 36);
+
+  // typed word, large
+  let caret = frameCount % 60 < 30 ? '|' : '';
+  textStyle(ITALIC);
+  textSize(36);
+  fill(255, 246, 222, 245);
+  text(labelBuffer + caret, cx, cy + 4);
+  textStyle(NORMAL);
+
+  // hint
+  fill(255, 236, 205, 130);
+  textSize(12);
+  text('enter to trap it        esc to let it go', cx, cy + ph / 2 - 30);
+
   pop();
 }
 
@@ -402,7 +493,7 @@ function keyTyped() {
 }
 
 function draw() {
-  background(sunActive ? color(255, 246, 224) : color(45, 42, 48));
+  background(sunActive ? color(252, 226, 92) : color(45, 42, 48));
 
   // advance the sun event
   if (sunActive) {
@@ -454,6 +545,19 @@ function draw() {
 
   drawLabelPrompt();
   drawHUD();
+
+  // which creature is under the cursor?
+  hoveredCreature = null;
+  if (!sunActive && !culling && !labelingCreature) {
+    let bestD = Infinity;
+    for (let c of creatures) {
+      let rr = max(55, 90 * c.drawSize);
+      let d = dist(mouseX, mouseY, c.x, c.y);
+      if (d < rr && d < bestD) { bestD = d; hoveredCreature = c; }
+    }
+  }
+
+  drawCursor();
 }
 
 function processWebcam() {

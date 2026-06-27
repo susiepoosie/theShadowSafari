@@ -10,6 +10,7 @@ html, body {
   background: #2d2a30;
   overflow: hidden;
   font-family: 'Courier New', Courier, monospace;
+  cursor: none;            /* the canvas draws a matchstick cursor instead */
 }
 
 #canvas-container canvas {
