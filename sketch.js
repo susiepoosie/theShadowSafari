@@ -1,5 +1,5 @@
 // ════════════════════════════════════════════════════════
-//  SHADOW SAFARI — sketch.js
+//  SHADOW SAFARI - sketch.js
 //  steadier capture · 20-creature cap w/ predation · consume & merge
 // ════════════════════════════════════════════════════════
 
@@ -34,7 +34,7 @@ const CONSUME_MS = 1100;
 const MAX_SIZE   = 4.0;
 let flashAmount = 0;        // orange screen-flash intensity (0..1), decays each frame
 
-// "the sun is out" — triggered by a webcam brightness spike (phone flashlight)
+// "the sun is out" - triggered by a webcam brightness spike (phone flashlight)
 let brightnessBuf;          // tiny buffer for cheap average-brightness sampling
 let brightSmooth = 0;       // slow ambient baseline
 let brightWarmup = 0;       // samples before detection arms
@@ -48,20 +48,20 @@ const SUN_DISSOLVE = 1000;  // final ms where creatures dissolve into the light
 const SUN_BRIGHT_THRESH = 195;  // absolute brightness counting as a flash
 const SUN_SPIKE_DELTA   = 45;   // jump above ambient baseline to trigger
 
-// the narrative — each stanza hides in the dark until the torch sweeps over it
+// the narrative - each stanza hides in the dark until the torch sweeps over it
 const STORY = [
   { fx: 0.05, fy: 0.10, fw: 0.30,
-    text: "Once, the world grew louder than it had ever been — and somehow, lonelier too. We gathered inside the glow of our little screens, and drifted quietly apart." },
+    text: "Once, the world grew louder than it had ever been. And somehow, lonelier too. We gathered inside the glow of our little screens, and drifted quietly apart." },
   { fx: 0.64, fy: 0.09, fw: 0.31,
     text: "Some of us were chained to a desk, bound by deadlines, sinking slowly beneath a rising tide of too-much-to-do and never-quite-enough." },
   { fx: 0.04, fy: 0.45, fw: 0.29,
-    text: "Some of us were held to the bed by an invisible weight — one thumb scrolling, scrolling, scrolling, while the long night tiptoed away." },
+    text: "Some of us were held to the bed by an invisible weight. One thumb scrolling, scrolling, scrolling, while the long night tiptoed away." },
   { fx: 0.66, fy: 0.45, fw: 0.30,
     text: "These glowing little rectangles were meant to set us free. But somewhere along the way, they learned, ever so gently, to keep us." },
   { fx: 0.05, fy: 0.78, fw: 0.30,
-    text: "So what if we turned the tale around? What if the screen could become a cage — not for us, but for the monsters whispering inside our minds?" },
+    text: "So what if we turned the tale around? What if the screen could become a cage, not for us, but for the monsters whispering inside our minds?" },
   { fx: 0.63, fy: 0.74, fw: 0.32,
-    text: "Every worry that gnaws in the dark has a shape. Lift your hands. Catch it in the light. Let the screen carry it now — so you no longer have to. Here, at last, you are the one who decides." },
+    text: "Every worry that gnaws in the dark has a shape. Lift your hands. Catch it in the light. Let the screen carry it now, so you no longer have to. Here, at last, you are the one who decides." },
 ];
 const STORY_SIZE = 18;
 const STORY_LH   = 27;
@@ -164,7 +164,7 @@ function setup() {
       handpose.detectStart(capture, gotHands);
     });
   } else {
-    console.error('ml5 failed to load — check the ml5 <script> tag in index.html');
+    console.error('ml5 failed to load. Check the ml5 <script> tag in index.html');
   }
 
   layoutStory();
@@ -714,7 +714,7 @@ function drawWebcamPreview() {
   text('the Portal is open', cx, cy + r + 14);
 }
 
-// orange screen flash — punched on cull start and on each kill, fades fast
+// orange screen flash - punched on cull start and on each kill, fades fast
 function drawFlash() {
   if (flashAmount > 0.01) {
     push();
@@ -734,13 +734,13 @@ function drawHUD() {
   textFont('Courier New');
   noStroke();
 
-  // line 1 — worries currently trapped
+  // line 1 - worries currently trapped
   let f = constrain(creatures.length / MAX_CREATURES, 0, 1);
   textSize(12);
   fill(255, lerp(255, 150, f), lerp(255, 60, f), 210);
   text(`WORRIES TRAPPED  ${creatures.length} / ${MAX_CREATURES}`, width / 2, 16);
 
-  // line 2 — state of mind
+  // line 2 - state of mind
   textSize(15);
   let label, col;
   if (culling) {
@@ -817,7 +817,7 @@ function checkStillness() {
 
   let progress = floor((stillTimer / STILL_NEEDED) * 100);
   if (!armed) {
-    instructionEl.html('Trapped — lift your hands to catch another');
+    instructionEl.html('Trapped. Lift your hands to catch another');
     instructionEl.removeClass('active');
   } else if (progress > 5) {
     instructionEl.html(`Hold still... ${progress}%`);
