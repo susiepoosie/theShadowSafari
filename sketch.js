@@ -24,7 +24,7 @@ let instructionEl;
 let captureBtn;
 
 let creatures = [];
-const MAX_CREATURES = 20;
+const MAX_CREATURES = 10;
 let culling = false;
 const CONSUME_MS = 1100;
 const MAX_SIZE   = 4.0;
@@ -34,6 +34,9 @@ let handpose;
 let handMemory = {};
 const HAND_MEMORY_MS = 250;
 let activeHands = [];
+
+// live screen rect of the centered preview window (read from the DOM slot)
+let previewRect = { x: 0, y: 0, w: 200, h: 150 };
 
 let lightX, lightY;
 const LIGHT_RADIUS   = 160;
@@ -52,7 +55,7 @@ const TARGET_SIZE  = 200;
 const BUF          = 340;
 
 const FIST_EXTENSION = 1.6;
-const CURIOUS_CHANCE = 0.20;
+const CURIOUS_CHANCE = 0.15;
 
 const PERSONALITIES = {
   sea: {
@@ -199,6 +202,13 @@ function draw() {
   if (cs > CURSOR_MOVE_THRESH) lastCursorMoveT = millis();
   cursorMoving = (millis() - lastCursorMoveT) < CURSOR_MOVE_LINGER;
 
+  // track the centered preview slot so the canvas preview & spawns line up
+  let slot = document.getElementById('preview-slot');
+  if (slot) {
+    let r = slot.getBoundingClientRect();
+    previewRect = { x: r.left, y: r.top, w: r.width, h: r.height };
+  }
+
   if (capture.loadedmetadata) {
     activeHands = getActiveHands();
     processWebcam();
@@ -295,10 +305,8 @@ function drawDarknessOverlay() {
 }
 
 function drawWebcamPreview() {
-  let previewW = 200;
-  let previewH = 150;
-  let x = 20;
-  let y = height - previewH - 28;
+  let x = previewRect.x, y = previewRect.y;
+  let previewW = previewRect.w, previewH = previewRect.h;
 
   push();
   translate(x + previewW, y);
@@ -321,7 +329,8 @@ function drawWebcamPreview() {
   noStroke();
   textSize(9);
   textFont('Courier New');
-  text('CAPTURE WINDOW', x, height - 10);
+  textAlign(CENTER, TOP);
+  text('CAPTURE WINDOW', x + previewW / 2, y + previewH + 8);
 }
 
 // orange screen flash — punched on cull start and on each kill, fades fast
@@ -466,9 +475,15 @@ function captureCreature() {
                      allHands[0][17].x, allHands[0][17].y) * scl;
   let fingerW = constrain(palmW * 0.32, 10, 60);
 
-  let spawnX = random(width  * 0.2, width  * 0.8);
-  let spawnY = random(height * 0.2, height * 0.8);
-  creatures.push(new Creature(localHands, fingerW, spawnX, spawnY, type));
+  // spawn on top of the preview window, then crawl outward into the screen
+  let spawnX = previewRect.x + previewRect.w / 2;
+  let spawnY = previewRect.y + previewRect.h / 2;
+  let creature = new Creature(localHands, fingerW, spawnX, spawnY, type);
+  let outAng = random(TWO_PI);
+  creature.heading = outAng;
+  creature.vx = cos(outAng) * 1.5;
+  creature.vy = sin(outAng) * 1.5;
+  creatures.push(creature);
 
   armed      = false;
   stillTimer = 0;

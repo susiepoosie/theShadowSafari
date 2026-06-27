@@ -1,4 +1,3 @@
-/* ── Reset ── */
 *, *::before, *::after {
   margin: 0;
   padding: 0;
@@ -13,7 +12,6 @@ html, body {
   font-family: 'Courier New', Courier, monospace;
 }
 
-/* ── Canvas sits full-screen ── */
 #canvas-container canvas {
   display: block;
   position: fixed;
@@ -21,18 +19,25 @@ html, body {
   left: 0;
 }
 
-/* ── UI overlay ── */
+/* centered cluster: instruction on top, preview in the middle, button below */
 #ui {
   position: fixed;
-  bottom: 32px;
+  top: 50%;
   left: 50%;
-  transform: translateX(-50%);
+  transform: translate(-50%, -50%);
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 14px;
   z-index: 10;
-  pointer-events: none; /* pass clicks through except the button */
+  pointer-events: none;
+}
+
+/* transparent space the canvas draws the live preview into */
+#preview-slot {
+  width: 200px;
+  height: 150px;
+  margin-bottom: 18px;   /* room for the CAPTURE WINDOW label drawn beneath */
 }
 
 #instruction {
