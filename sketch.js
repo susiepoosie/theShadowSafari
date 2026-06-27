@@ -24,7 +24,7 @@ let instructionEl;
 let captureBtn;
 
 let creatures = [];
-const MAX_CREATURES = 10;
+const MAX_CREATURES = 20;
 let culling = false;
 const CONSUME_MS = 1100;
 const MAX_SIZE   = 4.0;
@@ -39,6 +39,8 @@ let lightX, lightY;
 const LIGHT_RADIUS   = 160;
 const FLEE_RADIUS    = 120;
 const VISIBLE_RADIUS = 250;
+const SPOTLIGHT_RADIUS = 95;    // bright core that startles creatures
+const STARTLE_MS       = 450;   // squint + tremble duration before fleeing
 
 let cursorMoving    = false;
 let lastCursorMoveT = 0;
@@ -50,7 +52,7 @@ const TARGET_SIZE  = 200;
 const BUF          = 340;
 
 const FIST_EXTENSION = 1.6;
-const CURIOUS_CHANCE = 0.15;
+const CURIOUS_CHANCE = 0.20;
 
 const PERSONALITIES = {
   sea: {
@@ -335,27 +337,42 @@ function drawFlash() {
   if (flashAmount < 0.01) flashAmount = 0;
 }
 
-// top-center population counter; warms toward orange as the cap nears
+// top-center: always-on population counter + ecosystem status label
 function drawHUD() {
   push();
   textAlign(CENTER, TOP);
   textFont('Courier New');
-  textSize(12);
   noStroke();
 
+  // line 1 — count, always visible
+  let f = constrain(creatures.length / MAX_CREATURES, 0, 1);
+  textSize(12);
+  fill(255, lerp(255, 150, f), lerp(255, 60, f), 210);
+  text(`CREATURES  ${creatures.length} / ${MAX_CREATURES}`, width / 2, 16);
+
+  // line 2 — status
+  textSize(15);
   let label, col;
   if (culling) {
     let pulse = 0.6 + 0.4 * sin(millis() * 0.006);
-    label = `POPULATION CONTROL  ·  ${creatures.length} LEFT`;
-    col = color(255, 140, 40, 200 * pulse + 40);
+    label = 'POPULATION CONTROL';
+    col = color(255, 140, 40, 180 * pulse + 50);
   } else {
-    let f = constrain(creatures.length / MAX_CREATURES, 0, 1);
-    label = `CREATURES  ${creatures.length} / ${MAX_CREATURES}`;
-    col = color(255, lerp(255, 150, f), lerp(255, 60, f), lerp(90, 220, f));
+    let n = creatures.length;
+    if (n <= 3) {
+      label = 'NICE';
+      col = color(120, 210, 140, 215);
+    } else if (n <= 7) {
+      label = 'OKAY';
+      col = color(235, 200, 90, 220);
+    } else {
+      label = 'UHOH';
+      let p = 0.6 + 0.4 * sin(millis() * 0.008);
+      col = color(255, 110, 40, 200 * p + 40);
+    }
   }
-
   fill(col);
-  text(label, width / 2, 22);
+  text(label, width / 2, 40);
   pop();
 }
 
@@ -485,6 +502,7 @@ class Creature {
     this.opacity       = 0;
     this.targetOpacity = 180;
     this.limbFast      = false;
+    this.eyeOpen       = 1;        // 1 = wide circle, ~0.12 = squint
 
     this.heading    = random(TWO_PI);
     this.wanderSeed = random(1000);
@@ -516,8 +534,7 @@ class Creature {
     this.eyeCx    = p9.x + cos(fa) * pw * 0.15;
     this.eyeCy    = p9.y + sin(fa) * pw * 0.15;
     this.eyeSep   = pw * 0.5;
-    this.slitLen  = pw * 0.24;
-    this.slitThick = this.slitLen * 0.3;
+    this.eyeDiam  = pw * 0.26;     // wide-open circle size; squints to a slit
   }
 
   edgeSteer() {
@@ -600,74 +617,92 @@ class Creature {
       // ── normal cursor-driven behavior ──
       let d = dist(lightX, lightY, this.x, this.y);
 
-      if (this.state === 'fleeing' && !cursorMoving && this.stateTimer > 200) {
-        this.state = 'idle';
+      // spotlight core startles them: squint + tremble, then flee
+      if (d < SPOTLIGHT_RADIUS && this.state !== 'fleeing' && this.state !== 'startled') {
+        this.state = 'startled';
         this.stateTimer = 0;
       }
 
-      if (d < FLEE_RADIUS && cursorMoving) {
-        if (this.state !== 'fleeing') {
+      if (this.state === 'startled') {
+        this.vx = lerp(this.vx, 0, 0.3);
+        this.vy = lerp(this.vy, 0, 0.3);
+        this.targetOpacity = 215;
+        if (this.stateTimer > STARTLE_MS) {
           this.state = 'fleeing';
           this.stateTimer = 0;
           this.chooseFleeDest();
         }
-      } else if (d < VISIBLE_RADIUS) {
-        if (this.state !== 'illuminated' && this.state !== 'fleeing') {
-          this.state = 'illuminated';
-          this.stateTimer = 0;
-        }
+
       } else {
-        if (this.state === 'fleeing' && this.stateTimer > 1200) {
-          this.state = 'hidden';
-          this.stateTimer = 0;
-        } else if (this.state === 'illuminated') {
-          this.state = 'idle';
-        } else if (this.state === 'hidden' && this.stateTimer > 1500) {
+        if (this.state === 'fleeing' && !cursorMoving && this.stateTimer > 200) {
           this.state = 'idle';
           this.stateTimer = 0;
         }
-      }
 
-      if (this.state === 'fleeing') {
-        let fx = this.fleeTargetX - this.x;
-        let fy = this.fleeTargetY - this.y;
-        let mag = sqrt(fx * fx + fy * fy);
-        if (mag > 1) {
-          this.vx = lerp(this.vx, (fx / mag) * P.fleeSpeed, P.fleeEase);
-          this.vy = lerp(this.vy, (fy / mag) * P.fleeSpeed, P.fleeEase);
-        }
-        this.targetOpacity = this.stateTimer < 400 ? 220 : 160;
-
-      } else if (this.state === 'hidden') {
-        this.vx = lerp(this.vx, 0, 0.05);
-        this.vy = lerp(this.vy, 0, 0.05);
-        this.targetOpacity = 120;
-
-      } else {
-        if (this.curious) {
-          let ax = lightX - this.x, ay = lightY - this.y;
-          let mg = sqrt(ax * ax + ay * ay);
-          if (mg > 40) {
-            this.vx = lerp(this.vx, (ax / mg) * P.idleSpeed * 1.1, P.idleEase * 1.6);
-            this.vy = lerp(this.vy, (ay / mg) * P.idleSpeed * 1.1, P.idleEase * 1.6);
-          } else {
-            this.vx = lerp(this.vx, 0, 0.08);
-            this.vy = lerp(this.vy, 0, 0.08);
+        if (d < FLEE_RADIUS && cursorMoving) {
+          if (this.state !== 'fleeing') {
+            this.state = 'fleeing';
+            this.stateTimer = 0;
+            this.chooseFleeDest();
+          }
+        } else if (d < VISIBLE_RADIUS) {
+          if (this.state !== 'illuminated' && this.state !== 'fleeing') {
+            this.state = 'illuminated';
+            this.stateTimer = 0;
           }
         } else {
-          this.heading += (noise(this.wanderSeed, frameCount * 0.01) - 0.5) * 0.4;
-          this.vx = lerp(this.vx, cos(this.heading) * P.idleSpeed, P.idleEase);
-          this.vy = lerp(this.vy, sin(this.heading) * P.idleSpeed, P.idleEase);
+          if (this.state === 'fleeing' && this.stateTimer > 1200) {
+            this.state = 'hidden';
+            this.stateTimer = 0;
+          } else if (this.state === 'illuminated') {
+            this.state = 'idle';
+          } else if (this.state === 'hidden' && this.stateTimer > 1500) {
+            this.state = 'idle';
+            this.stateTimer = 0;
+          }
         }
-        this.edgeSteer();
-        this.targetOpacity = (this.state === 'illuminated') ? 200 : 180;
-      }
 
-      if (this.state !== 'fleeing' && P.jolt > 0 && random() < P.jolt) {
-        let a = random(TWO_PI);
-        let kick = P.idleSpeed * random(5, 11);
-        this.vx += cos(a) * kick;
-        this.vy += sin(a) * kick;
+        if (this.state === 'fleeing') {
+          let fx = this.fleeTargetX - this.x;
+          let fy = this.fleeTargetY - this.y;
+          let mag = sqrt(fx * fx + fy * fy);
+          if (mag > 1) {
+            this.vx = lerp(this.vx, (fx / mag) * P.fleeSpeed, P.fleeEase);
+            this.vy = lerp(this.vy, (fy / mag) * P.fleeSpeed, P.fleeEase);
+          }
+          this.targetOpacity = this.stateTimer < 400 ? 220 : 160;
+
+        } else if (this.state === 'hidden') {
+          this.vx = lerp(this.vx, 0, 0.05);
+          this.vy = lerp(this.vy, 0, 0.05);
+          this.targetOpacity = 120;
+
+        } else {
+          if (this.curious) {
+            let ax = lightX - this.x, ay = lightY - this.y;
+            let mg = sqrt(ax * ax + ay * ay);
+            if (mg > 40) {
+              this.vx = lerp(this.vx, (ax / mg) * P.idleSpeed * 1.1, P.idleEase * 1.6);
+              this.vy = lerp(this.vy, (ay / mg) * P.idleSpeed * 1.1, P.idleEase * 1.6);
+            } else {
+              this.vx = lerp(this.vx, 0, 0.08);
+              this.vy = lerp(this.vy, 0, 0.08);
+            }
+          } else {
+            this.heading += (noise(this.wanderSeed, frameCount * 0.01) - 0.5) * 0.4;
+            this.vx = lerp(this.vx, cos(this.heading) * P.idleSpeed, P.idleEase);
+            this.vy = lerp(this.vy, sin(this.heading) * P.idleSpeed, P.idleEase);
+          }
+          this.edgeSteer();
+          this.targetOpacity = (this.state === 'illuminated') ? 200 : 180;
+        }
+
+        if (this.state !== 'fleeing' && P.jolt > 0 && random() < P.jolt) {
+          let a = random(TWO_PI);
+          let kick = P.idleSpeed * random(5, 11);
+          this.vx += cos(a) * kick;
+          this.vy += sin(a) * kick;
+        }
       }
     }
 
@@ -681,23 +716,28 @@ class Creature {
 
     this.opacity  = lerp(this.opacity, this.targetOpacity, 0.04);
     this.drawSize = lerp(this.drawSize, this.size, 0.08);
+
+    let eyeTarget = 1;                                  // wide circle by default
+    if (this.state === 'startled')      eyeTarget = 0.12;   // squint in the spotlight
+    else if (this.state === 'fleeing')  eyeTarget = 0.45;   // half-shut while running
+    this.eyeOpen = lerp(this.eyeOpen, eyeTarget, 0.25);
   }
 
   chooseFleeDest() {
-    let edges = [
-      { x: random(width  * 0.05, width  * 0.2),  y: this.y },
-      { x: random(width  * 0.8,  width  * 0.95), y: this.y },
-      { x: this.x, y: random(height * 0.05, height * 0.2)  },
-      { x: this.x, y: random(height * 0.8,  height * 0.95) },
-    ];
-    let nearest = edges[0];
-    let nearDist = dist(this.x, this.y, nearest.x, nearest.y);
-    for (let e of edges) {
-      let dd = dist(this.x, this.y, e.x, e.y);
-      if (dd < nearDist) { nearDist = dd; nearest = e; }
+    // sample a grid of open points and pick the one furthest from the mouse
+    let best = null, bestD = -1;
+    let cols = 4, rows = 3, mx = 80;
+    for (let i = 0; i < cols; i++) {
+      for (let j = 0; j < rows; j++) {
+        let px = map(i, 0, cols - 1, mx, width  - mx);
+        let py = map(j, 0, rows - 1, mx, height - mx);
+        let dd = dist(px, py, mouseX, mouseY);
+        if (dd > bestD) { bestD = dd; best = { x: px, y: py }; }
+      }
     }
-    this.fleeTargetX = nearest.x;
-    this.fleeTargetY = nearest.y;
+    // jitter so creatures don't all stack on the exact same cell
+    this.fleeTargetX = best.x + random(-60, 60);
+    this.fleeTargetY = best.y + random(-60, 60);
   }
 
   // wrap: 0..1 curls fingers inward to grasp prey during consumption
@@ -765,13 +805,14 @@ class Creature {
   }
 
   drawEyes() {
+    let h = this.eyeDiam * max(0.10, this.eyeOpen);   // flatten to squint
     push();
     translate(this.eyeCx, this.eyeCy);
     rotate(this.forwardAngle);
     noStroke();
     fill(238, 232, 242, this.opacity);
-    ellipse(0, -this.eyeSep / 2, this.slitThick, this.slitLen);
-    ellipse(0,  this.eyeSep / 2, this.slitThick, this.slitLen);
+    ellipse(0, -this.eyeSep / 2, this.eyeDiam, h);
+    ellipse(0,  this.eyeSep / 2, this.eyeDiam, h);
     pop();
   }
 
@@ -799,6 +840,14 @@ class Creature {
     let breath = 1 + P.breathe * sin(t * 1.3 + this.phase);
     let wob    = P.bodyWobble * sin(t * 0.8 + this.phase);
     let escale = (this.state === 'eaten') ? this.eatenScale : 1;
+
+    // body trembles while caught in the spotlight
+    if (this.state === 'startled') {
+      let tr = 4 * this.drawSize;
+      jx += random(-tr, tr);
+      jy += random(-tr, tr);
+      wob += random(-0.06, 0.06);
+    }
 
     push();
     translate(this.x + jx, this.y + jy);
