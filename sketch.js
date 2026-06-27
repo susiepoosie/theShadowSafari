@@ -30,6 +30,20 @@ const CONSUME_MS = 1100;
 const MAX_SIZE   = 4.0;
 let flashAmount = 0;        // orange screen-flash intensity (0..1), decays each frame
 
+// "the sun is out" — triggered by a webcam brightness spike (phone flashlight)
+let brightnessBuf;          // tiny buffer for cheap average-brightness sampling
+let brightSmooth = 0;       // slow ambient baseline
+let brightWarmup = 0;       // samples before detection arms
+let sunActive = false;
+let sunTimer = 0;
+let sunFade = 1;            // 1 normally; ramps to 0 as creatures dissolve
+let sunFlashAmount = 0;     // white onset flash
+let sunCooldownUntil = 0;
+const SUN_DURATION = 5000;
+const SUN_DISSOLVE = 1000;  // final ms where creatures dissolve into the light
+const SUN_BRIGHT_THRESH = 195;  // absolute brightness counting as a flash
+const SUN_SPIKE_DELTA   = 45;   // jump above ambient baseline to trigger
+
 let handpose;
 let handMemory = {};
 const HAND_MEMORY_MS = 250;
@@ -94,6 +108,7 @@ function setup() {
 
   darkLayer      = createGraphics(width, height);
   creatureBuffer = createGraphics(BUF, BUF);
+  brightnessBuf  = createGraphics(32, 24);   // cheap brightness sampling
 
   instructionEl = select('#instruction');
   captureBtn    = select('#capture-btn');
@@ -154,6 +169,8 @@ function classifyHands(hands) {
 function manageCreatures() {
   creatures = creatures.filter(c => !c.removeFlag);
 
+  if (sunActive) return;   // no predation while the sun is out
+
   if (!culling && creatures.length >= MAX_CREATURES) { culling = true; flashAmount = 1.0; }
   if (culling && creatures.length <= 1) culling = false;
 
@@ -196,8 +213,84 @@ function manageCreatures() {
   }
 }
 
+// sample average webcam brightness; a sudden spike = phone flashlight = sunrise
+function checkBrightness() {
+  if (frameCount % 4 !== 0) return;
+
+  brightnessBuf.image(capture, 0, 0, 32, 24);
+  brightnessBuf.loadPixels();
+  let sum = 0, n = 0;
+  for (let i = 0; i < brightnessBuf.pixels.length; i += 4) {
+    sum += (brightnessBuf.pixels[i] + brightnessBuf.pixels[i + 1] + brightnessBuf.pixels[i + 2]) / 3;
+    n++;
+  }
+  let avg = n ? sum / n : 0;
+
+  // settle the baseline first so we don't false-trigger on startup
+  if (brightWarmup < 20) { brightSmooth = avg; brightWarmup++; return; }
+
+  if (millis() > sunCooldownUntil &&
+      avg > SUN_BRIGHT_THRESH && (avg - brightSmooth) > SUN_SPIKE_DELTA) {
+    triggerSun();
+  }
+  brightSmooth = lerp(brightSmooth, avg, 0.05);   // slow baseline lags spikes
+}
+
+function triggerSun() {
+  sunActive = true;
+  sunTimer = 0;
+  sunFade = 1;
+  sunFlashAmount = 1;
+  culling = false;
+  flashAmount = 0;
+  for (let c of creatures) { c.state = 'frenzy'; c.prey = null; c.eatenBy = null; }
+}
+
+function endSun() {
+  sunActive = false;
+  creatures = [];          // they've dissolved into the light
+  handMemory = {};         // reset local memory
+  culling = false;
+  flashAmount = 0;
+  prevFrame = null;
+  smoothCentroid = null;
+  stillTimer = 0;
+  armed = true;
+  sunFade = 1;
+  sunCooldownUntil = millis() + 2000;   // don't immediately re-trigger
+}
+
+function drawSunOverlay() {
+  push();
+  // white onset flash
+  if (sunFlashAmount > 0.01) {
+    noStroke();
+    fill(255, 255, 255, sunFlashAmount * 230);
+    rect(0, 0, width, height);
+  }
+  // announcement
+  noStroke();
+  textAlign(CENTER, CENTER);
+  textFont('Courier New');
+  textSize(34);
+  let pulse = 0.7 + 0.3 * sin(millis() * 0.01);
+  fill(255, 170, 40, 210 * pulse + 30);
+  text('THE SUN IS OUT!', width / 2, height * 0.26);
+  pop();
+  sunFlashAmount *= 0.9;
+}
+
 function draw() {
-  background(45, 42, 48);
+  background(sunActive ? color(255, 246, 224) : color(45, 42, 48));
+
+  // advance the sun event
+  if (sunActive) {
+    sunTimer += deltaTime;
+    sunFade = sunTimer > SUN_DURATION - SUN_DISSOLVE
+      ? constrain(map(sunTimer, SUN_DURATION - SUN_DISSOLVE, SUN_DURATION, 1, 0), 0, 1)
+      : 1;
+    if (sunTimer >= SUN_DURATION) endSun();
+  }
 
   lightX = lerp(lightX, mouseX, TORCH_EASE);
   lightY = lerp(lightY, mouseY, TORCH_EASE);
@@ -216,7 +309,10 @@ function draw() {
   if (capture.loadedmetadata) {
     activeHands = getActiveHands();
     processWebcam();
-    checkStillness();
+    if (!sunActive) {
+      checkBrightness();   // watch for a phone-flashlight spike
+      checkStillness();
+    }
   }
 
   manageCreatures();
@@ -226,7 +322,8 @@ function draw() {
     c.draw();
   }
 
-  drawDarknessOverlay();
+  if (sunActive) drawSunOverlay();
+  else           drawDarknessOverlay();
 
   drawFlash();
 
@@ -469,7 +566,7 @@ function checkStillness() {
 
 function captureCreature() {
   if (activeHands.length === 0) return;
-  if (culling || creatures.length >= MAX_CREATURES) {
+  if (sunActive || culling || creatures.length >= MAX_CREATURES) {
     armed = false;
     stillTimer = 0;
     return;
@@ -585,6 +682,27 @@ class Creature {
     let P = this.p;
     this.stateTimer += deltaTime;
     this.limbFast = false;
+
+    // ── the sun is out: squint and dash around in a frenzy ──
+    if (sunActive) {
+      this.heading += random(-0.8, 0.8);          // jerky panic turns
+      let sp = P.idleSpeed * 4 + 4;               // much faster than normal
+      this.vx = lerp(this.vx, cos(this.heading) * sp, 0.3);
+      this.vy = lerp(this.vy, sin(this.heading) * sp, 0.3);
+      this.limbFast = true;
+      this.edgeSteer();
+
+      this.x += this.vx;
+      this.y += this.vy;
+      let hardS = 40;
+      this.x = constrain(this.x, hardS, width  - hardS);
+      this.y = constrain(this.y, hardS, height - hardS);
+
+      this.targetOpacity = 235;
+      this.opacity = lerp(this.opacity, this.targetOpacity, 0.1);
+      this.eyeOpen = lerp(this.eyeOpen, 0.15, 0.25);   // squint against the glare
+      return;
+    }
 
     // ── consuming: hold prey, wrap, then absorb & grow ──
     if (this.state === 'consuming') {
@@ -863,7 +981,7 @@ class Creature {
     translate(this.eyeCx, this.eyeCy);
     rotate(this.forwardAngle);
     noStroke();
-    fill(238, 232, 242, this.opacity);
+    fill(238, 232, 242, this.opacity * sunFade);
     ellipse(0, -this.eyeSep / 2, this.eyeDiam, h);
     ellipse(0,  this.eyeSep / 2, this.eyeDiam, h);
     pop();
@@ -913,7 +1031,7 @@ class Creature {
     let d = dist(lightX, lightY, this.x, this.y);
     let litAmount = d < VISIBLE_RADIUS ? map(d, 0, VISIBLE_RADIUS, 1, 0) : 0;
     let brightness = lerp(60, 120, litAmount);
-    tint(brightness, brightness, brightness, this.opacity);
+    tint(brightness, brightness, brightness, this.opacity * sunFade);
     image(creatureBuffer, 0, 0);
 
     drawingContext.globalCompositeOperation = 'source-over';
