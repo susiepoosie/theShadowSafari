@@ -44,6 +44,29 @@ const SUN_DISSOLVE = 1000;  // final ms where creatures dissolve into the light
 const SUN_BRIGHT_THRESH = 195;  // absolute brightness counting as a flash
 const SUN_SPIKE_DELTA   = 45;   // jump above ambient baseline to trigger
 
+// the narrative — each stanza hides in the dark until the torch sweeps over it
+const STORY = [
+  { fx: 0.05, fy: 0.10, fw: 0.30,
+    text: "Once, the world grew louder than it had ever been — and somehow, lonelier too. We gathered inside the glow of our little screens, and drifted quietly apart." },
+  { fx: 0.64, fy: 0.09, fw: 0.31,
+    text: "Some of us were chained to a desk, bound by deadlines, sinking slowly beneath a rising tide of too-much-to-do and never-quite-enough." },
+  { fx: 0.04, fy: 0.45, fw: 0.29,
+    text: "Some of us were held to the bed by an invisible weight — one thumb scrolling, scrolling, scrolling, while the long night tiptoed away." },
+  { fx: 0.66, fy: 0.45, fw: 0.30,
+    text: "These glowing little rectangles were meant to set us free. But somewhere along the way, they learned, ever so gently, to keep us." },
+  { fx: 0.05, fy: 0.78, fw: 0.30,
+    text: "So what if we turned the tale around? What if the screen could become a cage — not for us, but for the monsters whispering inside our minds?" },
+  { fx: 0.63, fy: 0.74, fw: 0.32,
+    text: "Every worry that gnaws in the dark has a shape. Lift your hands. Catch it in the light. Let the screen carry it now — so you no longer have to. Here, at last, you are the one who decides." },
+];
+const STORY_SIZE = 18;
+const STORY_LH   = 27;
+let storyWords = [];        // laid-out {word, x, y}
+
+// naming a captured worry
+let labelingCreature = null;
+let labelBuffer = '';
+
 let handpose;
 let handMemory = {};
 const HAND_MEMORY_MS = 250;
@@ -127,6 +150,8 @@ function setup() {
   } else {
     console.error('ml5 failed to load — check the ml5 <script> tag in index.html');
   }
+
+  layoutStory();
 }
 
 function gotHands(results) {
@@ -168,6 +193,7 @@ function classifyHands(hands) {
 // predation bookkeeping: roles, catch detection, removals, culling flag
 function manageCreatures() {
   creatures = creatures.filter(c => !c.removeFlag);
+  if (labelingCreature && !creatures.includes(labelingCreature)) labelingCreature = null;
 
   if (sunActive) return;   // no predation while the sun is out
 
@@ -178,7 +204,7 @@ function manageCreatures() {
 
   if (!culling) return;
 
-  instructionEl.html('Population control — the cull has begun');
+  instructionEl.html('Your worries have begun to consume one another');
   instructionEl.removeClass('active');
 
   // each creature targets the nearest strictly-smaller creature
@@ -243,6 +269,7 @@ function triggerSun() {
   sunFlashAmount = 1;
   culling = false;
   flashAmount = 0;
+  labelingCreature = null;
   for (let c of creatures) { c.state = 'frenzy'; c.prey = null; c.eatenBy = null; }
 }
 
@@ -278,6 +305,100 @@ function drawSunOverlay() {
   text('THE SUN IS OUT!', width / 2, height * 0.26);
   pop();
   sunFlashAmount *= 0.9;
+}
+
+// pre-compute wrapped word positions for every stanza
+function layoutStory() {
+  storyWords = [];
+  push();
+  textFont('Georgia');
+  textSize(STORY_SIZE);
+  textAlign(LEFT, TOP);
+  for (let s of STORY) {
+    let ax = s.fx * width, ay = s.fy * height, maxW = s.fw * width;
+    let cx = ax, cy = ay;
+    for (let w of s.text.split(' ')) {
+      let ww = textWidth(w + ' ');
+      if (cx + ww - ax > maxW && cx > ax) { cx = ax; cy += STORY_LH; }
+      storyWords.push({ word: w, x: cx, y: cy });
+      cx += ww;
+    }
+  }
+  pop();
+}
+
+// reveal story words within the torch's reach
+function drawStory() {
+  push();
+  textFont('Georgia');
+  textSize(STORY_SIZE);
+  textAlign(LEFT, TOP);
+  noStroke();
+  let revealR = LIGHT_RADIUS + 30;
+  for (let w of storyWords) {
+    let d = dist(w.x, w.y, lightX, lightY);
+    if (d > revealR) continue;
+    let a = map(d, revealR, revealR * 0.35, 0, 225, true);
+    fill(255, 236, 205, a);
+    text(w.word, w.x, w.y);
+  }
+  pop();
+}
+
+function drawLabelPrompt() {
+  if (!labelingCreature) return;
+  push();
+  textAlign(CENTER, CENTER);
+  textFont('Georgia');
+  noStroke();
+  let y = height - 64;
+  let shown = labelBuffer.length ? labelBuffer : '…';
+  let caret = frameCount % 60 < 30 ? '|' : ' ';
+  textSize(14);
+  fill(255, 236, 205, 210);
+  text('name this worry:  ' + shown + caret, width / 2, y);
+  textSize(10);
+  fill(255, 236, 205, 120);
+  text('enter to trap it · esc to let it go', width / 2, y + 24);
+  pop();
+}
+
+// click a creature caught in the light to name it
+function mousePressed() {
+  if (sunActive || culling) return;
+  let best = null, bestD = Infinity;
+  for (let c of creatures) {
+    let rr = max(55, 90 * c.drawSize);
+    let d = dist(mouseX, mouseY, c.x, c.y);
+    if (d < rr && d < bestD) { bestD = d; best = c; }
+  }
+  if (best) {
+    if (labelingCreature && labelingCreature !== best) {
+      labelingCreature.label = labelBuffer.trim();
+    }
+    labelingCreature = best;
+    labelBuffer = best.label || '';
+  }
+}
+
+function keyPressed() {
+  if (!labelingCreature) return;
+  if (keyCode === ENTER || keyCode === RETURN) {
+    labelingCreature.label = labelBuffer.trim();
+    labelingCreature.state = 'idle';      // released calm, not fleeing
+    labelingCreature.stateTimer = 0;
+    labelingCreature = null;
+  } else if (keyCode === ESCAPE) {
+    labelingCreature = null;
+  } else if (keyCode === BACKSPACE) {
+    labelBuffer = labelBuffer.slice(0, -1);
+    return false;                          // don't navigate back
+  }
+}
+
+function keyTyped() {
+  if (!labelingCreature) return;
+  if (key.length === 1 && labelBuffer.length < 22) labelBuffer += key;
 }
 
 function draw() {
@@ -317,6 +438,8 @@ function draw() {
 
   manageCreatures();
 
+  if (!sunActive) drawStory();
+
   for (let c of creatures) {
     c.update();
     c.draw();
@@ -329,6 +452,7 @@ function draw() {
 
   if (capture.loadedmetadata) drawWebcamPreview();
 
+  drawLabelPrompt();
   drawHUD();
 }
 
@@ -470,29 +594,29 @@ function drawHUD() {
   textFont('Courier New');
   noStroke();
 
-  // line 1 — count, always visible
+  // line 1 — worries currently trapped
   let f = constrain(creatures.length / MAX_CREATURES, 0, 1);
   textSize(12);
   fill(255, lerp(255, 150, f), lerp(255, 60, f), 210);
-  text(`CREATURES  ${creatures.length} / ${MAX_CREATURES}`, width / 2, 16);
+  text(`WORRIES TRAPPED  ${creatures.length} / ${MAX_CREATURES}`, width / 2, 16);
 
-  // line 2 — status
+  // line 2 — state of mind
   textSize(15);
   let label, col;
   if (culling) {
     let pulse = 0.6 + 0.4 * sin(millis() * 0.006);
-    label = 'POPULATION CONTROL';
+    label = 'THEY DEVOUR ONE ANOTHER';
     col = color(255, 140, 40, 180 * pulse + 50);
   } else {
     let n = creatures.length;
     if (n <= 3) {
-      label = 'NICE';
+      label = 'A QUIET MIND';
       col = color(120, 210, 140, 215);
     } else if (n <= 7) {
-      label = 'OKAY';
+      label = 'A BUSY MIND';
       col = color(235, 200, 90, 220);
     } else {
-      label = 'UHOH';
+      label = 'A CROWDED MIND';
       let p = 0.6 + 0.4 * sin(millis() * 0.008);
       col = color(255, 110, 40, 200 * p + 40);
     }
@@ -516,7 +640,7 @@ function checkStillness() {
     prevFrame  = null;
     smoothCentroid = null;
     armed      = true;
-    instructionEl.html('Show your hand(s) to capture a shadow creature');
+    instructionEl.html('Lift your hands to trap a worry in the light');
     instructionEl.removeClass('active');
     return;
   }
@@ -553,13 +677,13 @@ function checkStillness() {
 
   let progress = floor((stillTimer / STILL_NEEDED) * 100);
   if (!armed) {
-    instructionEl.html('Shadow released — move your hands to make another');
+    instructionEl.html('Trapped — lift your hands to catch another');
     instructionEl.removeClass('active');
   } else if (progress > 5) {
     instructionEl.html(`Hold still... ${progress}%`);
     instructionEl.addClass('active');
   } else {
-    instructionEl.html('Show your hand(s) to capture a shadow creature');
+    instructionEl.html('Lift your hands to trap a worry in the light');
     instructionEl.removeClass('active');
   }
 }
@@ -609,6 +733,7 @@ function captureCreature() {
 function windowResized() {
   resizeCanvas(windowWidth, windowHeight);
   darkLayer = createGraphics(width, height);
+  layoutStory();
 }
 
 class Creature {
@@ -701,6 +826,18 @@ class Creature {
       this.targetOpacity = 235;
       this.opacity = lerp(this.opacity, this.targetOpacity, 0.1);
       this.eyeOpen = lerp(this.eyeOpen, 0.15, 0.25);   // squint against the glare
+      return;
+    }
+
+    // ── held still in the light while you name it ──
+    if (this === labelingCreature) {
+      this.vx = lerp(this.vx, 0, 0.4);
+      this.vy = lerp(this.vy, 0, 0.4);
+      this.x += this.vx;
+      this.y += this.vy;
+      this.opacity = lerp(this.opacity, 225, 0.1);
+      this.eyeOpen = lerp(this.eyeOpen, 1, 0.2);        // eyes open, caught
+      this.drawSize = lerp(this.drawSize, this.size, 0.1);
       return;
     }
 
@@ -1037,7 +1174,36 @@ class Creature {
     drawingContext.globalCompositeOperation = 'source-over';
     noTint();
     this.drawEyes();
+    if (this.label) this.drawLabel();
 
     pop();
+  }
+
+  // word wrapped in black across the creature's body
+  drawLabel() {
+    let maxW = TARGET_SIZE * 0.78;
+    textAlign(CENTER, CENTER);
+    textFont('Georgia');
+    textSize(22);
+
+    let lines = [], cur = '';
+    for (let w of this.label.split(' ')) {
+      let test = cur ? cur + ' ' + w : w;
+      if (textWidth(test) > maxW && cur) { lines.push(cur); cur = w; }
+      else cur = test;
+    }
+    if (cur) lines.push(cur);
+
+    let lh = 24;
+    let y0 = -((lines.length - 1) * lh) / 2;
+    let a = this.opacity * sunFade;
+
+    // faint halo so the black stays legible on a dark body
+    noStroke();
+    fill(255, 255, 255, a * 0.4);
+    for (let i = 0; i < lines.length; i++) text(lines[i], 0, y0 + i * lh);
+    // the word itself
+    fill(0, 0, 0, a);
+    for (let i = 0; i < lines.length; i++) text(lines[i], 0, y0 + i * lh);
   }
 }
