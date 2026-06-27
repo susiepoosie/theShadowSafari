@@ -21,7 +21,11 @@ const CENTROID_SMOOTH = 0.35;  // low-pass on the wrist centroid
 let smoothCentroid = null;
 
 let instructionEl;
+let uiEl;
 let captureBtn;
+let helpBtn;
+let helpOverlay;
+let menuOpen = false;   // instructions panel open?
 
 let creatures = [];
 const MAX_CREATURES = 10;
@@ -135,8 +139,19 @@ function setup() {
   brightnessBuf  = createGraphics(32, 24);   // cheap brightness sampling
 
   instructionEl = select('#instruction');
+  uiEl          = select('#ui');
   captureBtn    = select('#capture-btn');
   if (captureBtn) captureBtn.mousePressed(captureCreature);   // guard: button may be absent
+
+  // instructions menu wiring
+  helpBtn       = select('#help-btn');
+  helpOverlay   = select('#help-overlay');
+  let helpPanel = select('#help-panel');
+  let helpClose = select('#help-close');
+  if (helpBtn)   helpBtn.elt.addEventListener('click', (e) => { e.stopPropagation(); openHelp(); });
+  if (helpOverlay) helpOverlay.elt.addEventListener('click', () => closeHelp());      // backdrop closes
+  if (helpPanel) helpPanel.elt.addEventListener('click', (e) => e.stopPropagation()); // clicks inside stay
+  if (helpClose) helpClose.elt.addEventListener('click', (e) => { e.stopPropagation(); closeHelp(); });
 
   pixelDensity(1);
 
@@ -350,8 +365,18 @@ function drawStory() {
   pop();
 }
 
+function openHelp() {
+  menuOpen = true;
+  if (helpOverlay) helpOverlay.removeClass('hidden');
+}
+function closeHelp() {
+  menuOpen = false;
+  if (helpOverlay) helpOverlay.addClass('hidden');
+}
+
 // custom cursor: a lit matchstick, or a question mark when over a creature
 function drawCursor() {
+  if (menuOpen) return;   // the menu shows the real cursor instead
   let mx = mouseX, my = mouseY;
 
   if (hoveredCreature) {
@@ -456,7 +481,7 @@ function drawLabelPrompt() {
 
 // click a creature caught in the light to name it
 function mousePressed() {
-  if (sunActive || culling) return;
+  if (menuOpen || sunActive || culling) return;
   let best = null, bestD = Infinity;
   for (let c of creatures) {
     let rr = max(55, 90 * c.drawSize);
@@ -473,6 +498,10 @@ function mousePressed() {
 }
 
 function keyPressed() {
+  if (menuOpen) {                       // ESC closes the guide
+    if (keyCode === ESCAPE) closeHelp();
+    return;
+  }
   if (!labelingCreature) return;
   if (keyCode === ENTER || keyCode === RETURN) {
     labelingCreature.label = labelBuffer.trim();
@@ -521,14 +550,18 @@ function draw() {
   if (capture.loadedmetadata) {
     activeHands = getActiveHands();
     processWebcam();
-    if (!sunActive) {
+    if (!sunActive && !menuOpen) {
       checkBrightness();   // watch for a phone-flashlight spike
       checkStillness();
     }
   }
 
-  // keep the DOM instruction from showing on top of the name popup
-  if (instructionEl) instructionEl.style('opacity', labelingCreature ? '0' : '1');
+  // while the name popup is open, hide the DOM UI layer so none of it
+  // (instruction, slot, button) can render on top of the canvas popup.
+  // visibility (not display) keeps the layout box so the portal stays aligned.
+  if (uiEl) uiEl.style('visibility', labelingCreature ? 'hidden' : 'visible');
+  // tuck the instructions button away during naming and the sunrise
+  if (helpBtn) helpBtn.style('visibility', (labelingCreature || sunActive) ? 'hidden' : 'visible');
 
   manageCreatures();
 
@@ -551,7 +584,7 @@ function draw() {
 
   // which creature is under the cursor?
   hoveredCreature = null;
-  if (!sunActive && !culling && !labelingCreature) {
+  if (!sunActive && !culling && !labelingCreature && !menuOpen) {
     let bestD = Infinity;
     for (let c of creatures) {
       let rr = max(55, 90 * c.drawSize);
