@@ -60,7 +60,7 @@ const CURIOUS_CHANCE = 0.15;
 const PERSONALITIES = {
   sea: {
     sizeMul: 1.5,
-    idleSpeed: 0.25, idleEase: 0.012,
+    idleSpeed: 0.5,  idleEase: 0.012,
     fleeSpeed: 2.6,  fleeEase: 0.06,
     jolt: 0,         jitter: 0,
     wig: { idle: 0.13, flee: 0.18 }, spd: { idle: 1.6, flee: 3.0 },
@@ -68,7 +68,7 @@ const PERSONALITIES = {
   },
   land: {
     sizeMul: 1.0,
-    idleSpeed: 0.5,  idleEase: 0.06,
+    idleSpeed: 0.9,  idleEase: 0.06,
     fleeSpeed: 4.5,  fleeEase: 0.14,
     jolt: 0.012,     jitter: 0.4,
     wig: { idle: 0.10, flee: 0.16 }, spd: { idle: 3.0, flee: 7.0 },
@@ -76,7 +76,7 @@ const PERSONALITIES = {
   },
   bug: {
     sizeMul: 0.62,
-    idleSpeed: 0.9,  idleEase: 0.15,
+    idleSpeed: 1.4,  idleEase: 0.15,
     fleeSpeed: 6.5,  fleeEase: 0.22,
     jolt: 0.04,      jitter: 1.4,
     wig: { idle: 0.07, flee: 0.12 }, spd: { idle: 7.0, flee: 12.0 },
@@ -309,32 +309,48 @@ function drawDarknessOverlay() {
 }
 
 function drawWebcamPreview() {
-  let x = previewRect.x, y = previewRect.y;
-  let previewW = previewRect.w, previewH = previewRect.h;
+  let cx = previewRect.x + previewRect.w / 2;
+  let cy = previewRect.y + previewRect.h / 2;
+  let r  = min(previewRect.w, previewRect.h) / 2;
 
+  // webcam feed clipped to a circle (the portal)
   push();
-  translate(x + previewW, y);
-  scale(-1, 1);
-  image(capture, 0, 0, previewW, previewH);
+  drawingContext.save();
+  drawingContext.beginPath();
+  drawingContext.arc(cx, cy, r, 0, TWO_PI);
+  drawingContext.clip();
+
+  imageMode(CENTER);
+  translate(cx, cy);
+  scale(-1, 1);                                     // mirror (selfie)
+  let coverH = 2 * r;
+  let coverW = 2 * r * ((capture.width || 4) / (capture.height || 3));  // cover-fit
+  image(capture, 0, 0, coverW, coverH);
 
   let prog = constrain(stillTimer / STILL_NEEDED, 0, 1);
   if (handGraphics && prog > 0.02) {
-    tint(18, 16, 22, prog * 235);
-    image(handGraphics, 0, 0, previewW, previewH);
+    tint(18, 16, 22, prog * 235);                   // capture darkens with stillness
+    image(handGraphics, 0, 0, coverW, coverH);
   }
+  drawingContext.restore();
   pop();
 
+  // glowing portal rim
   noFill();
-  stroke(255, 60);
-  strokeWeight(1);
-  rect(x, y, previewW, previewH);
+  stroke(255, 160, 60, 45);
+  strokeWeight(7);
+  circle(cx, cy, 2 * r + 7);
+  stroke(255, 205, 130, 130);
+  strokeWeight(2);
+  circle(cx, cy, 2 * r);
 
-  fill(255, 60);
+  // label
   noStroke();
-  textSize(9);
+  fill(255, 200, 140, 160);
+  textSize(11);
   textFont('Courier New');
   textAlign(CENTER, TOP);
-  text('CAPTURE WINDOW', x + previewW / 2, y + previewH + 8);
+  text('the Portal is open', cx, cy + r + 14);
 }
 
 // orange screen flash — punched on cull start and on each kill, fades fast
@@ -485,8 +501,8 @@ function captureCreature() {
   let creature = new Creature(localHands, fingerW, spawnX, spawnY, type);
   let outAng = random(TWO_PI);
   creature.heading = outAng;
-  creature.vx = cos(outAng) * 1.5;
-  creature.vy = sin(outAng) * 1.5;
+  creature.vx = cos(outAng) * 2.5;
+  creature.vy = sin(outAng) * 2.5;
   creatures.push(creature);
 
   armed      = false;
@@ -726,6 +742,24 @@ class Creature {
     }
 
     // ── common integration ──
+    // separation: drift apart from neighbors so they don't clump in the centre
+    // (disabled during the cull so predators can actually close in on prey)
+    if (!culling) {
+      let sepX = 0, sepY = 0;
+      for (let o of creatures) {
+        if (o === this) continue;
+        let dd = dist(this.x, this.y, o.x, o.y);
+        let minD = (this.drawSize + o.drawSize) * 60;
+        if (dd < minD && dd > 0.01) {
+          let f = (minD - dd) / minD;
+          sepX += (this.x - o.x) / dd * f;
+          sepY += (this.y - o.y) / dd * f;
+        }
+      }
+      this.vx += sepX * 0.7;
+      this.vy += sepY * 0.7;
+    }
+
     this.x += this.vx;
     this.y += this.vy;
 

@@ -33,11 +33,11 @@ html, body {
   pointer-events: none;
 }
 
-/* transparent space the canvas draws the live preview into */
+/* transparent space the canvas draws the circular portal into */
 #preview-slot {
-  width: 200px;
-  height: 150px;
-  margin-bottom: 18px;   /* room for the CAPTURE WINDOW label drawn beneath */
+  width: 130px;
+  height: 130px;
+  margin-bottom: 22px;   /* room for the "the Portal is open" label drawn beneath */
 }
 
 #instruction {
@@ -54,6 +54,7 @@ html, body {
 }
 
 #capture-btn {
+  display: none;          /* hidden — holding hands still auto-captures */
   pointer-events: all;
   background: transparent;
   border: 1px solid rgba(255, 255, 255, 0.25);
