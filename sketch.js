@@ -24,7 +24,7 @@ let instructionEl;
 let captureBtn;
 
 let creatures = [];
-const MAX_CREATURES = 20;
+const MAX_CREATURES = 10;
 let culling = false;
 const CONSUME_MS = 1100;
 const MAX_SIZE   = 4.0;
@@ -50,7 +50,7 @@ const TARGET_SIZE  = 200;
 const BUF          = 340;
 
 const FIST_EXTENSION = 1.6;
-const CURIOUS_CHANCE = 0.20;
+const CURIOUS_CHANCE = 0.15;
 
 const PERSONALITIES = {
   sea: {
