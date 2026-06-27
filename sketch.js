@@ -1,6 +1,6 @@
 // ════════════════════════════════════════════════════════
 //  SHADOW SAFARI — sketch.js
-//  slit eyes · tapering tentacles · 20% curious
+//  steadier capture · 20-creature cap w/ predation · consume & merge
 // ════════════════════════════════════════════════════════
 
 let capture;
@@ -14,10 +14,21 @@ let stillTimer    = 0;
 const STILL_NEEDED = 2000;
 let armed         = true;
 
+// capture steadiness
+const STILL_TOLERANCE = 18;    // px of smoothed movement allowed (was 12)
+const STILL_DECAY     = 0.8;   // progress erosion on movement (was 2.0)
+const CENTROID_SMOOTH = 0.35;  // low-pass on the wrist centroid
+let smoothCentroid = null;
+
 let instructionEl;
 let captureBtn;
 
 let creatures = [];
+const MAX_CREATURES = 20;
+let culling = false;
+const CONSUME_MS = 1100;
+const MAX_SIZE   = 4.0;
+let flashAmount = 0;        // orange screen-flash intensity (0..1), decays each frame
 
 let handpose;
 let handMemory = {};
@@ -39,7 +50,7 @@ const TARGET_SIZE  = 200;
 const BUF          = 340;
 
 const FIST_EXTENSION = 1.6;
-const CURIOUS_CHANCE = 0.20;   // chance a new creature approaches the cursor
+const CURIOUS_CHANCE = 0.20;
 
 const PERSONALITIES = {
   sea: {
@@ -48,8 +59,7 @@ const PERSONALITIES = {
     fleeSpeed: 2.6,  fleeEase: 0.06,
     jolt: 0,         jitter: 0,
     wig: { idle: 0.13, flee: 0.18 }, spd: { idle: 1.6, flee: 3.0 },
-    bodyWobble: 0.06, breathe: 0.04,
-    taper: true,                       // tentacles taper toward the tips
+    bodyWobble: 0.06, breathe: 0.04, taper: true,
   },
   land: {
     sizeMul: 1.0,
@@ -57,8 +67,7 @@ const PERSONALITIES = {
     fleeSpeed: 4.5,  fleeEase: 0.14,
     jolt: 0.012,     jitter: 0.4,
     wig: { idle: 0.10, flee: 0.16 }, spd: { idle: 3.0, flee: 7.0 },
-    bodyWobble: 0.05, breathe: 0.03,
-    taper: false,
+    bodyWobble: 0.05, breathe: 0.03, taper: false,
   },
   bug: {
     sizeMul: 0.62,
@@ -66,8 +75,7 @@ const PERSONALITIES = {
     fleeSpeed: 6.5,  fleeEase: 0.22,
     jolt: 0.04,      jitter: 1.4,
     wig: { idle: 0.07, flee: 0.12 }, spd: { idle: 7.0, flee: 12.0 },
-    bodyWobble: 0.04, breathe: 0.02,
-    taper: false,
+    bodyWobble: 0.04, breathe: 0.02, taper: false,
   },
 };
 
@@ -133,6 +141,52 @@ function classifyHands(hands) {
   return ext < FIST_EXTENSION ? 'bug' : 'land';
 }
 
+// predation bookkeeping: roles, catch detection, removals, culling flag
+function manageCreatures() {
+  creatures = creatures.filter(c => !c.removeFlag);
+
+  if (!culling && creatures.length >= MAX_CREATURES) { culling = true; flashAmount = 1.0; }
+  if (culling && creatures.length <= 1) culling = false;
+
+  for (let c of creatures) { c.hunt = null; c.predator = null; }
+
+  if (!culling) return;
+
+  instructionEl.html('Population control — the cull has begun');
+  instructionEl.removeClass('active');
+
+  // each creature targets the nearest strictly-smaller creature
+  for (let c of creatures) {
+    if (c.state === 'consuming' || c.state === 'eaten') continue;
+    let bestPrey = null, bestD = Infinity, bestThreat = null, bestTD = Infinity;
+    for (let o of creatures) {
+      if (o === c || o.state === 'eaten' || o.state === 'consuming') continue;
+      let dd = dist(c.x, c.y, o.x, o.y);
+      if (o.size < c.size - 0.01 && dd < bestD)  { bestD = dd;  bestPrey = o; }
+      if (o.size > c.size + 0.01 && dd < bestTD) { bestTD = dd; bestThreat = o; }
+    }
+    c.hunt = bestPrey;
+    c.predator = bestThreat;
+  }
+
+  // catch → begin consuming
+  for (let c of creatures) {
+    if (c.state === 'consuming' || c.state === 'eaten') continue;
+    let prey = c.hunt;
+    if (prey && prey.state !== 'eaten' && prey.state !== 'consuming') {
+      let eatDist = (c.size + prey.size) * 55;
+      if (dist(c.x, c.y, prey.x, prey.y) < eatDist) {
+        c.state = 'consuming';
+        c.prey = prey;
+        c.consumeT = 0;
+        prey.state = 'eaten';
+        prey.eatenBy = c;
+        flashAmount = max(flashAmount, 0.45);   // pulse on each kill
+      }
+    }
+  }
+}
+
 function draw() {
   background(45, 42, 48);
 
@@ -149,6 +203,8 @@ function draw() {
     checkStillness();
   }
 
+  manageCreatures();
+
   for (let c of creatures) {
     c.update();
     c.draw();
@@ -156,7 +212,11 @@ function draw() {
 
   drawDarknessOverlay();
 
+  drawFlash();
+
   if (capture.loadedmetadata) drawWebcamPreview();
+
+  drawHUD();
 }
 
 function processWebcam() {
@@ -262,10 +322,56 @@ function drawWebcamPreview() {
   text('CAPTURE WINDOW', x, height - 10);
 }
 
+// orange screen flash — punched on cull start and on each kill, fades fast
+function drawFlash() {
+  if (flashAmount > 0.01) {
+    push();
+    noStroke();
+    fill(255, 130, 30, flashAmount * 150);
+    rect(0, 0, width, height);
+    pop();
+  }
+  flashAmount *= 0.90;
+  if (flashAmount < 0.01) flashAmount = 0;
+}
+
+// top-center population counter; warms toward orange as the cap nears
+function drawHUD() {
+  push();
+  textAlign(CENTER, TOP);
+  textFont('Courier New');
+  textSize(12);
+  noStroke();
+
+  let label, col;
+  if (culling) {
+    let pulse = 0.6 + 0.4 * sin(millis() * 0.006);
+    label = `POPULATION CONTROL  ·  ${creatures.length} LEFT`;
+    col = color(255, 140, 40, 200 * pulse + 40);
+  } else {
+    let f = constrain(creatures.length / MAX_CREATURES, 0, 1);
+    label = `CREATURES  ${creatures.length} / ${MAX_CREATURES}`;
+    col = color(255, lerp(255, 150, f), lerp(255, 60, f), lerp(90, 220, f));
+  }
+
+  fill(col);
+  text(label, width / 2, 22);
+  pop();
+}
+
 function checkStillness() {
+  if (culling) {
+    stillTimer = 0;
+    armed = false;
+    smoothCentroid = null;
+    prevFrame = null;
+    return;
+  }
+
   if (activeHands.length === 0) {
     stillTimer = 0;
     prevFrame  = null;
+    smoothCentroid = null;
     armed      = true;
     instructionEl.html('Show your hand(s) to capture a shadow creature');
     instructionEl.removeClass('active');
@@ -277,18 +383,25 @@ function checkStillness() {
   cx /= activeHands.length;
   cy /= activeHands.length;
 
-  if (!prevFrame) { prevFrame = { x: cx, y: cy }; return; }
+  // low-pass the centroid so tremors don't register as motion
+  if (!smoothCentroid) smoothCentroid = { x: cx, y: cy };
+  else {
+    smoothCentroid.x = lerp(smoothCentroid.x, cx, CENTROID_SMOOTH);
+    smoothCentroid.y = lerp(smoothCentroid.y, cy, CENTROID_SMOOTH);
+  }
 
-  let moved   = dist(cx, cy, prevFrame.x, prevFrame.y);
-  let isStill = moved < 12;
+  if (!prevFrame) { prevFrame = { x: smoothCentroid.x, y: smoothCentroid.y }; return; }
+
+  let moved   = dist(smoothCentroid.x, smoothCentroid.y, prevFrame.x, prevFrame.y);
+  let isStill = moved < STILL_TOLERANCE;
 
   if (isStill) {
     stillTimer += deltaTime;
   } else {
-    stillTimer = max(0, stillTimer - deltaTime * 2);
+    stillTimer = max(0, stillTimer - deltaTime * STILL_DECAY);
     armed = true;
   }
-  prevFrame = { x: cx, y: cy };
+  prevFrame = { x: smoothCentroid.x, y: smoothCentroid.y };
 
   if (stillTimer >= STILL_NEEDED && armed) {
     captureCreature();
@@ -310,6 +423,11 @@ function checkStillness() {
 
 function captureCreature() {
   if (activeHands.length === 0) return;
+  if (culling || creatures.length >= MAX_CREATURES) {
+    armed = false;
+    stillTimer = 0;
+    return;
+  }
 
   let type = classifyHands(activeHands);
   let allHands = activeHands.map(h => h.keypoints.map(k => ({ x: k.x, y: k.y })));
@@ -353,6 +471,11 @@ class Creature {
 
     this.curious = random() < CURIOUS_CHANCE;
 
+    // slight size-jitter guarantees no two creatures are ever exactly equal,
+    // so predation always resolves down to a single survivor
+    this.size     = this.p.sizeMul * random(0.95, 1.05);
+    this.drawSize = this.size;
+
     this.x  = x;
     this.y  = y;
     this.vx = random(-0.3, 0.3);
@@ -361,6 +484,7 @@ class Creature {
     this.state         = 'idle';
     this.opacity       = 0;
     this.targetOpacity = 180;
+    this.limbFast      = false;
 
     this.heading    = random(TWO_PI);
     this.wanderSeed = random(1000);
@@ -370,10 +494,18 @@ class Creature {
     this.fleeTargetY = y;
     this.stateTimer  = 0;
 
+    // predation
+    this.hunt = null;
+    this.predator = null;
+    this.prey = null;
+    this.eatenBy = null;
+    this.consumeT = 0;
+    this.eatenScale = 1;
+    this.removeFlag = false;
+
     this.setupEyes();
   }
 
-  // eyes face along the wrist→finger axis of the first captured hand
   setupEyes() {
     let h = this.hands[0];
     let p0 = h[0], p9 = h[9], p5 = h[5], p17 = h[17];
@@ -388,88 +520,158 @@ class Creature {
     this.slitThick = this.slitLen * 0.3;
   }
 
+  edgeSteer() {
+    let m = 130;
+    if (this.x < m || this.x > width - m || this.y < m || this.y > height - m) {
+      let toC = atan2(height / 2 - this.y, width / 2 - this.x);
+      let diff = atan2(sin(toC - this.heading), cos(toC - this.heading));
+      this.heading += diff * 0.08;
+    }
+  }
+
   update() {
     let P = this.p;
     this.stateTimer += deltaTime;
-    let d = dist(lightX, lightY, this.x, this.y);
+    this.limbFast = false;
 
-    if (this.state === 'fleeing' && !cursorMoving && this.stateTimer > 200) {
-      this.state = 'idle';
-      this.stateTimer = 0;
-    }
-
-    if (d < FLEE_RADIUS && cursorMoving) {
-      if (this.state !== 'fleeing') {
-        this.state = 'fleeing';
-        this.stateTimer = 0;
-        this.chooseFleeDest();
-      }
-    } else if (d < VISIBLE_RADIUS) {
-      if (this.state !== 'illuminated' && this.state !== 'fleeing') {
-        this.state = 'illuminated';
-        this.stateTimer = 0;
-      }
-    } else {
-      if (this.state === 'fleeing' && this.stateTimer > 1200) {
-        this.state = 'hidden';
-        this.stateTimer = 0;
-      } else if (this.state === 'illuminated') {
-        this.state = 'idle';
-      } else if (this.state === 'hidden' && this.stateTimer > 1500) {
-        this.state = 'idle';
-        this.stateTimer = 0;
-      }
-    }
-
-    if (this.state === 'fleeing') {
-      let fx = this.fleeTargetX - this.x;
-      let fy = this.fleeTargetY - this.y;
-      let mag = sqrt(fx * fx + fy * fy);
-      if (mag > 1) {
-        this.vx = lerp(this.vx, (fx / mag) * P.fleeSpeed, P.fleeEase);
-        this.vy = lerp(this.vy, (fy / mag) * P.fleeSpeed, P.fleeEase);
-      }
-      this.targetOpacity = this.stateTimer < 400 ? 220 : 160;
-
-    } else if (this.state === 'hidden') {
-      this.vx = lerp(this.vx, 0, 0.05);
-      this.vy = lerp(this.vy, 0, 0.05);
-      this.targetOpacity = 120;
-
-    } else {
-      if (this.curious) {
-        let ax = lightX - this.x, ay = lightY - this.y;
-        let mg = sqrt(ax * ax + ay * ay);
-        if (mg > 40) {
-          this.vx = lerp(this.vx, (ax / mg) * P.idleSpeed * 1.1, P.idleEase * 1.6);
-          this.vy = lerp(this.vy, (ay / mg) * P.idleSpeed * 1.1, P.idleEase * 1.6);
-        } else {
-          this.vx = lerp(this.vx, 0, 0.08);
-          this.vy = lerp(this.vy, 0, 0.08);
+    // ── consuming: hold prey, wrap, then absorb & grow ──
+    if (this.state === 'consuming') {
+      this.consumeT += deltaTime;
+      this.vx = lerp(this.vx, 0, 0.2);
+      this.vy = lerp(this.vy, 0, 0.2);
+      this.x += this.vx; this.y += this.vy;
+      this.opacity  = lerp(this.opacity, 220, 0.06);
+      this.drawSize = lerp(this.drawSize, this.size, 0.1);
+      if (this.consumeT >= CONSUME_MS) {
+        if (this.prey) {
+          this.size = min(MAX_SIZE,
+            sqrt(this.size * this.size + this.prey.size * this.prey.size));
+          this.prey.removeFlag = true;
+          this.prey = null;
         }
+        this.state = 'idle';
+        this.stateTimer = 0;
+      }
+      return;
+    }
+
+    // ── eaten: pulled into predator, shrink & fade ──
+    if (this.state === 'eaten') {
+      if (this.eatenBy) {
+        this.x = lerp(this.x, this.eatenBy.x, 0.15);
+        this.y = lerp(this.y, this.eatenBy.y, 0.15);
+      }
+      this.eatenScale = lerp(this.eatenScale, 0.08, 0.08);
+      this.opacity    = lerp(this.opacity, 0, 0.07);
+      this.drawSize   = lerp(this.drawSize, this.size, 0.1);
+      return;
+    }
+
+    if (culling) {
+      // predation movement
+      let threat = this.predator;
+      let threatened = threat &&
+        dist(this.x, this.y, threat.x, threat.y) < threat.drawSize * 130;
+
+      if (threatened) {
+        let ax = this.x - threat.x, ay = this.y - threat.y;
+        let mg = sqrt(ax * ax + ay * ay) || 1;
+        this.vx = lerp(this.vx, (ax / mg) * P.fleeSpeed, 0.12);
+        this.vy = lerp(this.vy, (ay / mg) * P.fleeSpeed, 0.12);
+        this.targetOpacity = 190;
+        this.limbFast = true;
+      } else if (this.hunt) {
+        let ax = this.hunt.x - this.x, ay = this.hunt.y - this.y;
+        let mg = sqrt(ax * ax + ay * ay) || 1;
+        let hs = this.hunt.p.fleeSpeed * 1.2 + 0.6;   // always out-pace the prey
+        this.vx = lerp(this.vx, (ax / mg) * hs, 0.08);
+        this.vy = lerp(this.vy, (ay / mg) * hs, 0.08);
+        this.targetOpacity = 205;
+        this.limbFast = true;
       } else {
         this.heading += (noise(this.wanderSeed, frameCount * 0.01) - 0.5) * 0.4;
         this.vx = lerp(this.vx, cos(this.heading) * P.idleSpeed, P.idleEase);
         this.vy = lerp(this.vy, sin(this.heading) * P.idleSpeed, P.idleEase);
+        this.targetOpacity = 180;
+      }
+      this.edgeSteer();
+
+    } else {
+      // ── normal cursor-driven behavior ──
+      let d = dist(lightX, lightY, this.x, this.y);
+
+      if (this.state === 'fleeing' && !cursorMoving && this.stateTimer > 200) {
+        this.state = 'idle';
+        this.stateTimer = 0;
       }
 
-      let m = 130;
-      if (this.x < m || this.x > width - m || this.y < m || this.y > height - m) {
-        let toC = atan2(height / 2 - this.y, width / 2 - this.x);
-        let diff = atan2(sin(toC - this.heading), cos(toC - this.heading));
-        this.heading += diff * 0.08;
+      if (d < FLEE_RADIUS && cursorMoving) {
+        if (this.state !== 'fleeing') {
+          this.state = 'fleeing';
+          this.stateTimer = 0;
+          this.chooseFleeDest();
+        }
+      } else if (d < VISIBLE_RADIUS) {
+        if (this.state !== 'illuminated' && this.state !== 'fleeing') {
+          this.state = 'illuminated';
+          this.stateTimer = 0;
+        }
+      } else {
+        if (this.state === 'fleeing' && this.stateTimer > 1200) {
+          this.state = 'hidden';
+          this.stateTimer = 0;
+        } else if (this.state === 'illuminated') {
+          this.state = 'idle';
+        } else if (this.state === 'hidden' && this.stateTimer > 1500) {
+          this.state = 'idle';
+          this.stateTimer = 0;
+        }
       }
 
-      this.targetOpacity = (this.state === 'illuminated') ? 200 : 180;
+      if (this.state === 'fleeing') {
+        let fx = this.fleeTargetX - this.x;
+        let fy = this.fleeTargetY - this.y;
+        let mag = sqrt(fx * fx + fy * fy);
+        if (mag > 1) {
+          this.vx = lerp(this.vx, (fx / mag) * P.fleeSpeed, P.fleeEase);
+          this.vy = lerp(this.vy, (fy / mag) * P.fleeSpeed, P.fleeEase);
+        }
+        this.targetOpacity = this.stateTimer < 400 ? 220 : 160;
+
+      } else if (this.state === 'hidden') {
+        this.vx = lerp(this.vx, 0, 0.05);
+        this.vy = lerp(this.vy, 0, 0.05);
+        this.targetOpacity = 120;
+
+      } else {
+        if (this.curious) {
+          let ax = lightX - this.x, ay = lightY - this.y;
+          let mg = sqrt(ax * ax + ay * ay);
+          if (mg > 40) {
+            this.vx = lerp(this.vx, (ax / mg) * P.idleSpeed * 1.1, P.idleEase * 1.6);
+            this.vy = lerp(this.vy, (ay / mg) * P.idleSpeed * 1.1, P.idleEase * 1.6);
+          } else {
+            this.vx = lerp(this.vx, 0, 0.08);
+            this.vy = lerp(this.vy, 0, 0.08);
+          }
+        } else {
+          this.heading += (noise(this.wanderSeed, frameCount * 0.01) - 0.5) * 0.4;
+          this.vx = lerp(this.vx, cos(this.heading) * P.idleSpeed, P.idleEase);
+          this.vy = lerp(this.vy, sin(this.heading) * P.idleSpeed, P.idleEase);
+        }
+        this.edgeSteer();
+        this.targetOpacity = (this.state === 'illuminated') ? 200 : 180;
+      }
+
+      if (this.state !== 'fleeing' && P.jolt > 0 && random() < P.jolt) {
+        let a = random(TWO_PI);
+        let kick = P.idleSpeed * random(5, 11);
+        this.vx += cos(a) * kick;
+        this.vy += sin(a) * kick;
+      }
     }
 
-    if (this.state !== 'fleeing' && P.jolt > 0 && random() < P.jolt) {
-      let a = random(TWO_PI);
-      let kick = P.idleSpeed * random(5, 11);
-      this.vx += cos(a) * kick;
-      this.vy += sin(a) * kick;
-    }
-
+    // ── common integration ──
     this.x += this.vx;
     this.y += this.vy;
 
@@ -477,7 +679,8 @@ class Creature {
     this.x = constrain(this.x, hard, width  - hard);
     this.y = constrain(this.y, hard, height - hard);
 
-    this.opacity = lerp(this.opacity, this.targetOpacity, 0.04);
+    this.opacity  = lerp(this.opacity, this.targetOpacity, 0.04);
+    this.drawSize = lerp(this.drawSize, this.size, 0.08);
   }
 
   chooseFleeDest() {
@@ -497,7 +700,8 @@ class Creature {
     this.fleeTargetY = nearest.y;
   }
 
-  animatedHand(hand, t, wig, spd) {
+  // wrap: 0..1 curls fingers inward to grasp prey during consumption
+  animatedHand(hand, t, wig, spd, wrap) {
     let out = hand.map(p => ({ x: p.x, y: p.y }));
     const fingers = [[1,2,3,4],[5,6,7,8],[9,10,11,12],[13,14,15,16],[17,18,19,20]];
     for (let fi = 0; fi < fingers.length; fi++) {
@@ -506,7 +710,8 @@ class Creature {
         let cur = chain[j], prev = chain[j - 1];
         let segX = hand[cur].x - hand[prev].x;
         let segY = hand[cur].y - hand[prev].y;
-        let ang  = wig * j * sin(t * spd + this.phase + fi * 1.1 + j * 0.6);
+        let ang  = wig * j * sin(t * spd + this.phase + fi * 1.1 + j * 0.6)
+                 + wrap * 0.6 * j;                       // inward grasp curl
         let ca = cos(ang), sa = sin(ang);
         out[cur].x = out[prev].x + (segX * ca - segY * sa);
         out[cur].y = out[prev].y + (segX * sa + segY * ca);
@@ -517,7 +722,6 @@ class Creature {
 
   drawFinger(g, pts, chain) {
     if (this.p.taper) {
-      // segment-by-segment, width shrinking toward the tip
       let n = chain.length;
       g.noStroke();
       for (let j = 1; j < n; j++) {
@@ -529,7 +733,7 @@ class Creature {
         g.line(a.x, a.y, b.x, b.y);
         g.noStroke();
         g.fill(255);
-        g.circle(b.x, b.y, wB);          // round each joint to the local width
+        g.circle(b.x, b.y, wB);
       }
     } else {
       g.noFill();
@@ -545,7 +749,6 @@ class Creature {
     g.strokeCap(ROUND);
     g.strokeJoin(ROUND);
 
-    // rounded body
     g.noStroke();
     g.fill(255);
     let mcx = (pts[0].x + pts[9].x) / 2;
@@ -576,16 +779,18 @@ class Creature {
     let t = millis() * 0.001;
     let P = this.p;
 
-    let wig = P.wig.idle, spd = P.spd.idle;
-    if (this.state === 'fleeing')     { wig = P.wig.flee; spd = P.spd.flee; }
-    else if (this.state === 'hidden') { wig *= 0.6;       spd *= 0.7; }
+    let wrap = (this.state === 'consuming')
+      ? constrain(this.consumeT / CONSUME_MS, 0, 1) : 0;
 
-    // buffer holds the animated silhouette only (breathing/wobble applied below)
+    let wig = P.wig.idle, spd = P.spd.idle;
+    if (this.state === 'fleeing' || this.limbFast) { wig = P.wig.flee; spd = P.spd.flee; }
+    else if (this.state === 'hidden')              { wig *= 0.6;       spd *= 0.7; }
+
     creatureBuffer.clear();
     creatureBuffer.push();
     creatureBuffer.translate(BUF / 2, BUF / 2);
     for (let hand of this.hands) {
-      this.drawSilhouette(creatureBuffer, this.animatedHand(hand, t, wig, spd));
+      this.drawSilhouette(creatureBuffer, this.animatedHand(hand, t, wig, spd, wrap));
     }
     creatureBuffer.pop();
 
@@ -593,14 +798,14 @@ class Creature {
     let jy = P.jitter ? random(-P.jitter, P.jitter) : 0;
     let breath = 1 + P.breathe * sin(t * 1.3 + this.phase);
     let wob    = P.bodyWobble * sin(t * 0.8 + this.phase);
+    let escale = (this.state === 'eaten') ? this.eatenScale : 1;
 
     push();
     translate(this.x + jx, this.y + jy);
-    scale(P.sizeMul);
+    scale(this.drawSize * escale);
     scale(breath);
     rotate(wob);
 
-    // dark, torch-brightened body
     imageMode(CENTER);
     drawingContext.globalCompositeOperation = 'multiply';
     let d = dist(lightX, lightY, this.x, this.y);
@@ -609,7 +814,6 @@ class Creature {
     tint(brightness, brightness, brightness, this.opacity);
     image(creatureBuffer, 0, 0);
 
-    // light slit eyes on top, in the same local frame
     drawingContext.globalCompositeOperation = 'source-over';
     noTint();
     this.drawEyes();
