@@ -527,6 +527,9 @@ function draw() {
     }
   }
 
+  // keep the DOM instruction from showing on top of the name popup
+  if (instructionEl) instructionEl.style('opacity', labelingCreature ? '0' : '1');
+
   manageCreatures();
 
   if (!sunActive) drawStory();
@@ -1302,12 +1305,12 @@ class Creature {
     let y0 = -((lines.length - 1) * lh) / 2;
     let a = this.opacity * sunFade;
 
-    // faint halo so the black stays legible on a dark body
     noStroke();
-    fill(255, 255, 255, a * 0.4);
-    for (let i = 0; i < lines.length; i++) text(lines[i], 0, y0 + i * lh);
-    // the word itself
-    fill(0, 0, 0, a);
+    // dark drop shadow so the light text reads on any body
+    fill(20, 14, 26, a * 0.85);
+    for (let i = 0; i < lines.length; i++) text(lines[i], 1.5, y0 + i * lh + 1.5);
+    // the word itself, light and obvious
+    fill(255, 247, 228, a);
     for (let i = 0; i < lines.length; i++) text(lines[i], 0, y0 + i * lh);
   }
 }
