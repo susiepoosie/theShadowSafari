@@ -97,17 +97,21 @@ function setup() {
 
   instructionEl = select('#instruction');
   captureBtn    = select('#capture-btn');
-  captureBtn.mousePressed(captureCreature);
+  if (captureBtn) captureBtn.mousePressed(captureCreature);   // guard: button may be absent
 
   pixelDensity(1);
 
   lightX = width  / 2;
   lightY = height / 2;
 
-  handpose = ml5.handPose({ maxHands: 2, flipped: false }, () => {
-    console.log('HandPose ready');
-    handpose.detectStart(capture, gotHands);
-  });
+  if (typeof ml5 !== 'undefined' && ml5.handPose) {
+    handpose = ml5.handPose({ maxHands: 2, flipped: false }, () => {
+      console.log('HandPose ready');
+      handpose.detectStart(capture, gotHands);
+    });
+  } else {
+    console.error('ml5 failed to load — check the ml5 <script> tag in index.html');
+  }
 }
 
 function gotHands(results) {
