@@ -1,6 +1,6 @@
 // ════════════════════════════════════════════════════════
-//  SHADOW SAFARI - sketch.js
-//  steadier capture · 20-creature cap w/ predation · consume & merge
+// AI DECLARATION
+// This code was written with the help of Claude AI, mainly for the purpose of refining and debugging.
 // ════════════════════════════════════════════════════════
 
 let capture;
