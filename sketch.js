@@ -15,8 +15,8 @@ const STILL_NEEDED = 2000;
 let armed         = true;
 
 // capture steadiness
-const STILL_TOLERANCE = 18;    // px of smoothed movement allowed (was 12)
-const STILL_DECAY     = 0.8;   // progress erosion on movement (was 2.0)
+const STILL_VEL       = 1.1;   // px/ms of smoothed movement allowed (frame-rate independent)
+const STILL_DECAY     = 0.7;   // progress erosion on movement
 const CENTROID_SMOOTH = 0.35;  // low-pass on the wrist centroid
 let smoothCentroid = null;
 
@@ -95,6 +95,8 @@ const CURSOR_MOVE_LINGER  = 180;
 const TORCH_EASE   = 0.2;
 const TARGET_SIZE  = 200;
 const BUF          = 340;
+// finger joint chains (hoisted so animatedHand doesn't rebuild this every frame)
+const FINGER_CHAINS = [[1,2,3,4],[5,6,7,8],[9,10,11,12],[13,14,15,16],[17,18,19,20]];
 
 const FIST_EXTENSION = 1.6;
 const CURIOUS_CHANCE = 0.15;
@@ -799,13 +801,21 @@ function checkStillness() {
 
   if (!prevFrame) { prevFrame = { x: smoothCentroid.x, y: smoothCentroid.y }; return; }
 
-  let moved   = dist(smoothCentroid.x, smoothCentroid.y, prevFrame.x, prevFrame.y);
-  let isStill = moved < STILL_TOLERANCE;
+  // velocity must use the REAL elapsed time, so a steady hand still reads as
+  // "still" when the frame rate drops under a heavy creature load. (Dividing by
+  // a clamped dt was the bug that stalled the countdown past ~5 creatures.)
+  let dtReal  = max(deltaTime, 1);
+  // clamp only the slice added to the timer, so one janky frame can't overshoot
+  let dtAccum = min(deltaTime, 100);
+
+  let moved    = dist(smoothCentroid.x, smoothCentroid.y, prevFrame.x, prevFrame.y);
+  let velocity = moved / dtReal;
+  let isStill  = velocity < STILL_VEL;
 
   if (isStill) {
-    stillTimer += deltaTime;
+    stillTimer += dtAccum;
   } else {
-    stillTimer = max(0, stillTimer - deltaTime * STILL_DECAY);
+    stillTimer = max(0, stillTimer - dtAccum * STILL_DECAY);
     armed = true;
   }
   prevFrame = { x: smoothCentroid.x, y: smoothCentroid.y };
@@ -1191,7 +1201,7 @@ class Creature {
   // wrap: 0..1 curls fingers inward to grasp prey during consumption
   animatedHand(hand, t, wig, spd, wrap) {
     let out = hand.map(p => ({ x: p.x, y: p.y }));
-    const fingers = [[1,2,3,4],[5,6,7,8],[9,10,11,12],[13,14,15,16],[17,18,19,20]];
+    const fingers = FINGER_CHAINS;
     for (let fi = 0; fi < fingers.length; fi++) {
       let chain = fingers[fi];
       for (let j = 1; j < chain.length; j++) {
@@ -1209,6 +1219,7 @@ class Creature {
   }
 
   drawFinger(g, pts, chain) {
+    let lit = this._lit || 120;
     if (this.p.taper) {
       let n = chain.length;
       g.noStroke();
@@ -1216,16 +1227,16 @@ class Creature {
         let a = pts[chain[j - 1]], b = pts[chain[j]];
         let wA = lerp(this.fingerW, this.fingerW * 0.18, (j - 1) / (n - 1));
         let wB = lerp(this.fingerW, this.fingerW * 0.18,  j      / (n - 1));
-        g.stroke(255);
+        g.stroke(lit);
         g.strokeWeight((wA + wB) / 2);
         g.line(a.x, a.y, b.x, b.y);
         g.noStroke();
-        g.fill(255);
+        g.fill(lit);
         g.circle(b.x, b.y, wB);
       }
     } else {
       g.noFill();
-      g.stroke(255);
+      g.stroke(lit);
       g.strokeWeight(this.fingerW);
       g.beginShape();
       for (let i of chain) g.vertex(pts[i].x, pts[i].y);
@@ -1236,9 +1247,10 @@ class Creature {
   drawSilhouette(g, pts) {
     g.strokeCap(ROUND);
     g.strokeJoin(ROUND);
+    let lit = this._lit || 120;
 
     g.noStroke();
-    g.fill(255);
+    g.fill(lit);
     let mcx = (pts[0].x + pts[9].x) / 2;
     let mcy = (pts[0].y + pts[9].y) / 2;
     let pwid = dist(pts[5].x, pts[5].y, pts[17].x, pts[17].y);
@@ -1275,6 +1287,14 @@ class Creature {
     if (this.state === 'fleeing' || this.limbFast) { wig = P.wig.flee; spd = P.spd.flee; }
     else if (this.state === 'hidden')              { wig *= 0.6;       spd *= 0.7; }
 
+    // brightness (how dark the multiply is) depends on distance to the flame.
+    // bake it into the silhouette's fill BELOW instead of using tint() at blit
+    // time. tint() runs a per-pixel CPU loop every frame, per creature, which
+    // is what made the page choke past a handful of creatures.
+    let d = dist(lightX, lightY, this.x, this.y);
+    let litAmount = d < VISIBLE_RADIUS ? map(d, 0, VISIBLE_RADIUS, 1, 0) : 0;
+    this._lit = lerp(60, 120, litAmount);
+
     creatureBuffer.clear();
     creatureBuffer.push();
     creatureBuffer.translate(BUF / 2, BUF / 2);
@@ -1305,14 +1325,11 @@ class Creature {
 
     imageMode(CENTER);
     drawingContext.globalCompositeOperation = 'multiply';
-    let d = dist(lightX, lightY, this.x, this.y);
-    let litAmount = d < VISIBLE_RADIUS ? map(d, 0, VISIBLE_RADIUS, 1, 0) : 0;
-    let brightness = lerp(60, 120, litAmount);
-    tint(brightness, brightness, brightness, this.opacity * sunFade);
+    drawingContext.globalAlpha = (this.opacity * sunFade) / 255;   // cheap, GPU
     image(creatureBuffer, 0, 0);
+    drawingContext.globalAlpha = 1;
 
     drawingContext.globalCompositeOperation = 'source-over';
-    noTint();
     this.drawEyes();
     if (this.label) this.drawLabel();
 
